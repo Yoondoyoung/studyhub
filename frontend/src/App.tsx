@@ -6,8 +6,11 @@ import { DashboardPage } from './components/DashboardPage';
 import { StudyGroupsPage } from './components/StudyGroupsPage';
 import { SoloStudyPage } from './components/SoloStudyPage';
 import { FriendsPage } from './components/FriendsPage';
+import { FriendDetailPage } from './components/FriendDetailPage';
 import { SettingsPage } from './components/SettingsPage';
+import { ProfilePage } from './components/ProfilePage';
 import { Toaster } from './components/ui/sonner';
+import { Avatar, AvatarFallback, AvatarImage } from './components/ui/avatar';
 import { 
   LayoutDashboard, 
   Users, 
@@ -19,12 +22,23 @@ import {
 } from 'lucide-react';
 import { toast } from 'sonner';
 
-type Page = 'login' | 'register' | 'dashboard' | 'study-groups' | 'solo-study' | 'friends' | 'settings';
+type Page = 'login' | 'register' | 'dashboard' | 'study-groups' | 'solo-study' | 'friends' | 'settings' | 'profile' | 'friend-detail';
 
 interface User {
   id: string;
   email: string;
   username: string;
+  userId?: string;
+  category?: string;
+  profileImageUrl?: string;
+}
+
+interface Friend {
+  id: string;
+  username: string;
+  email: string;
+  category: string;
+  profileImageUrl?: string;
 }
 
 export default function App() {
@@ -32,11 +46,18 @@ export default function App() {
   const [accessToken, setAccessToken] = useState<string | null>(null);
   const [user, setUser] = useState<User | null>(null);
   const [prototypeMode, setPrototypeMode] = useState(false);
+  const [selectedFriend, setSelectedFriend] = useState<Friend | null>(null);
 
   useEffect(() => {
     // Check for existing session
     checkSession();
   }, []);
+
+  useEffect(() => {
+    if (accessToken && currentPage === 'profile') {
+      fetchProfile();
+    }
+  }, [accessToken, currentPage]);
 
   const checkSession = async () => {
     const savedToken = localStorage.getItem('accessToken');
@@ -121,6 +142,30 @@ export default function App() {
     setAccessToken(null);
     setUser(null);
     setCurrentPage('login');
+  };
+
+  const fetchProfile = async () => {
+    try {
+      const response = await fetch(`${apiBase}/settings`, {
+        headers: { Authorization: `Bearer ${accessToken}` }
+      });
+      const data = await response.json();
+      if (data.settings) {
+        setUser((prev) => (prev ? { ...prev, ...data.settings } : prev));
+      }
+    } catch (error) {
+      console.error('Failed to load profile:', error);
+    }
+  };
+
+  const getInitials = (name?: string, fallback?: string) => {
+    const base = (name || fallback || 'U').trim();
+    return base
+      .split(' ')
+      .map((chunk) => chunk[0])
+      .join('')
+      .slice(0, 2)
+      .toUpperCase();
   };
 
   if (!accessToken) {
@@ -232,6 +277,39 @@ export default function App() {
             🎨 PROTOTYPE MODE
           </div>
         )}
+
+        <div className="flex items-center justify-end px-6 pt-4">
+          <button
+            onClick={() => setCurrentPage('profile')}
+            className="flex items-center gap-2 text-sm text-gray-600 hover:text-gray-900"
+            title="View profile"
+          >
+            <Avatar className="size-9">
+              {user?.profileImageUrl && (
+                <AvatarImage
+                  src={user.profileImageUrl}
+                  alt={user.username || 'Profile'}
+                  className="object-cover"
+                  style={{ objectPosition: 'center' }}
+                />
+              )}
+              <AvatarFallback
+                className="bg-gray-200 text-gray-700 text-xs font-semibold"
+                style={
+                  user?.profileImageUrl
+                    ? {
+                        backgroundImage: `url(${user.profileImageUrl})`,
+                        backgroundSize: 'cover',
+                        backgroundPosition: 'center'
+                      }
+                    : undefined
+                }
+              >
+                {!user?.profileImageUrl ? getInitials(user?.username, user?.email) : null}
+              </AvatarFallback>
+            </Avatar>
+          </button>
+        </div>
         
         <main className="p-6">
           {currentPage === 'dashboard' && (
@@ -245,10 +323,31 @@ export default function App() {
           )}
           {currentPage === 'solo-study' && <SoloStudyPage />}
           {currentPage === 'friends' && (
-            <FriendsPage accessToken={accessToken} />
+            <FriendsPage
+              accessToken={accessToken}
+              onViewFriend={(friend) => {
+                setSelectedFriend(friend);
+                setCurrentPage('friend-detail');
+              }}
+            />
           )}
           {currentPage === 'settings' && (
-            <SettingsPage accessToken={accessToken} />
+            <SettingsPage
+              accessToken={accessToken}
+              onProfileUpdate={(nextProfile) =>
+                setUser((prev) => (prev ? { ...prev, ...nextProfile } : prev))
+              }
+            />
+          )}
+          {currentPage === 'profile' && user && (
+            <ProfilePage accessToken={accessToken} user={user} />
+          )}
+          {currentPage === 'friend-detail' && selectedFriend && (
+            <FriendDetailPage
+              accessToken={accessToken}
+              friend={selectedFriend}
+              onBack={() => setCurrentPage('friends')}
+            />
           )}
         </main>
       </div>
