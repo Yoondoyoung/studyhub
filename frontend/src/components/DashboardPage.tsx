@@ -8,6 +8,7 @@ import { Clock, Plus, Trash2, Play, Pause, CheckCircle2, Flame, Trophy, Target, 
 import { toast } from 'sonner';
 import { Avatar, AvatarFallback } from './ui/avatar';
 import { Badge } from './ui/badge';
+import { Switch } from './ui/switch';
 import { apiBase } from '../utils/api';
 
 interface Todo {
@@ -15,8 +16,11 @@ interface Todo {
   name: string;
   subject: string;
   duration: number;
+  plannedDuration?: number;
+  actualDuration?: number;
   completed: boolean;
   completedAt?: string;
+  shared?: boolean;
 }
 
 interface DashboardPageProps {
@@ -25,10 +29,9 @@ interface DashboardPageProps {
 
 interface Friend {
   id: string;
-  name: string;
-  lastActivity: string;
-  status: 'online' | 'offline';
-  studyTime: number;
+  username?: string;
+  email?: string;
+  lastActivityAt?: string | null;
 }
 
 interface StudyRoom {
@@ -38,14 +41,15 @@ interface StudyRoom {
   time: string;
   participants: number;
   maxParticipants: number;
-  icon: string;
+  icon?: string;
 }
 
 export function DashboardPage({ accessToken }: DashboardPageProps) {
+  const TIMER_STORAGE_KEY = 'studyhub_active_timer';
   const [todos, setTodos] = useState<Todo[]>([]);
-  const [dailyTotal, setDailyTotal] = useState(45900); // 12h 45m in seconds
-  const [weeklyTotal, setWeeklyTotal] = useState(18000); // 5 hours
-  const [monthlyTotal, setMonthlyTotal] = useState(86400); // 24 hours
+  const [dailyTotal, setDailyTotal] = useState(0);
+  const [weeklyTotal, setWeeklyTotal] = useState(0);
+  const [monthlyTotal, setMonthlyTotal] = useState(0);
   const [isAddDialogOpen, setIsAddDialogOpen] = useState(false);
   const [isEditDialogOpen, setIsEditDialogOpen] = useState(false);
   const [editingTodoId, setEditingTodoId] = useState<string | null>(null);
@@ -53,68 +57,82 @@ export function DashboardPage({ accessToken }: DashboardPageProps) {
   const [timerSeconds, setTimerSeconds] = useState(0);
   
   // Goals
-  const [dailyGoal, setDailyGoal] = useState(57600); // 16 hours
-  const [weeklyGoal, setWeeklyGoal] = useState(36000); // 10 hours
-  const [monthlyGoal, setMonthlyGoal] = useState(144000); // 40 hours
+  const [dailyGoal, setDailyGoal] = useState(0);
+  const [weeklyGoal, setWeeklyGoal] = useState(0);
+  const [monthlyGoal, setMonthlyGoal] = useState(0);
   const [isGoalDialogOpen, setIsGoalDialogOpen] = useState(false);
   const [editingGoal, setEditingGoal] = useState<'daily' | 'weekly' | 'monthly' | null>(null);
   const [goalTimeInput, setGoalTimeInput] = useState('00:00');
 
-  // Mock friends data
-  const [friends] = useState<Friend[]>([
-    { id: '1', name: 'Olivia', lastActivity: 'Online', status: 'online', studyTime: 7200 },
-    { id: '2', name: 'Catherine', lastActivity: 'Online', status: 'online', studyTime: 5400 },
-    { id: '3', name: 'Cate Huh', lastActivity: 'Online', status: 'online', studyTime: 3600 },
-    { id: '4', name: 'Ismenrd', lastActivity: 'Online', status: 'online', studyTime: 9000 },
-  ]);
-
-  // Mock nearby study rooms
-  const [nearbyRooms] = useState<StudyRoom[]>([
-    { id: '1', topic: 'Library Quiet Zone', location: 'Library', time: '', participants: 0, maxParticipants: 0, icon: '📚' },
-    { id: '2', topic: 'University Annex', location: 'Annex', time: '', participants: 0, maxParticipants: 0, icon: '🏛️' },
-    { id: '3', topic: 'University Annex', location: 'Annex B', time: '', participants: 0, maxParticipants: 0, icon: '🏫' },
-  ]);
-
-  // Study streak calendar (7 days)
-  const [studyStreak] = useState([
-    { day: 'M', completed: true },
-    { day: 'T', completed: true },
-    { day: 'W', completed: true },
-    { day: 'T', completed: true },
-    { day: 'F', completed: true },
-    { day: 'S', completed: false },
-    { day: 'S', completed: false },
-  ]);
+  const [friends, setFriends] = useState<Friend[]>([]);
+  const [nearbyRooms, setNearbyRooms] = useState<StudyRoom[]>([]);
+  const [studyStreak, setStudyStreak] = useState<{ day: string; completed: boolean }[]>([]);
   
   const [newTodo, setNewTodo] = useState({
     name: '',
     subject: '',
-    durationMinutes: 0
+    durationMinutes: 0,
+    shared: false
   });
 
   const [editTodo, setEditTodo] = useState({
     name: '',
     subject: '',
-    durationMinutes: 0
+    durationMinutes: 0,
+    shared: false
   });
 
   useEffect(() => {
     fetchTodos();
     fetchDailyStudyTime();
     fetchWeeklyMonthlyStudyTime();
+    fetchGoals();
+    fetchFriendsList();
+    fetchStudyGroups();
+    fetchStudyStreak();
   }, []);
 
   useEffect(() => {
+    const loadStoredTimer = () => {
+      try {
+        const raw = localStorage.getItem(TIMER_STORAGE_KEY);
+        return raw ? JSON.parse(raw) : null;
+      } catch {
+        return null;
+      }
+    };
+
+    const getElapsedSeconds = (timerState: { startTime: number; baseSeconds: number }) => {
+      return timerState.baseSeconds + Math.floor((Date.now() - timerState.startTime) / 1000);
+    };
+
     let interval: number | undefined;
     if (activeTimer) {
       interval = setInterval(() => {
-        setTimerSeconds(prev => prev + 1);
+        const stored = loadStoredTimer();
+        if (stored && stored.todoId === activeTimer) {
+          setTimerSeconds(getElapsedSeconds(stored));
+        }
       }, 1000);
     }
     return () => {
       if (interval) clearInterval(interval);
     };
   }, [activeTimer]);
+
+  useEffect(() => {
+    try {
+      const raw = localStorage.getItem(TIMER_STORAGE_KEY);
+      if (!raw) return;
+      const stored = JSON.parse(raw) as { todoId: string; startTime: number; baseSeconds: number };
+      if (!stored?.todoId || !stored?.startTime) return;
+      const elapsed = stored.baseSeconds + Math.floor((Date.now() - stored.startTime) / 1000);
+      setActiveTimer(stored.todoId);
+      setTimerSeconds(elapsed);
+    } catch {
+      // ignore invalid stored timer data
+    }
+  }, []);
 
   const fetchTodos = async () => {
     try {
@@ -180,6 +198,65 @@ export function DashboardPage({ accessToken }: DashboardPageProps) {
     }
   };
 
+  const fetchFriendsList = async () => {
+    try {
+      const response = await fetch(`${apiBase}/friends`, {
+        headers: { Authorization: `Bearer ${accessToken}` }
+      });
+      const data = await response.json();
+      setFriends(data.friends || []);
+    } catch (error) {
+      console.error('Failed to fetch friends:', error);
+    }
+  };
+
+  const fetchStudyGroups = async () => {
+    try {
+      const response = await fetch(`${apiBase}/study-groups`);
+      const data = await response.json();
+      setNearbyRooms(data.groups || []);
+    } catch (error) {
+      console.error('Failed to fetch study groups:', error);
+    }
+  };
+
+  const fetchStudyStreak = async () => {
+    try {
+      const dates = Array.from({ length: 7 }, (_, index) => getISODateOffset(-index));
+      const responses = await Promise.all(
+        dates.map((date) =>
+          fetch(`${apiBase}/study-time/${date}`, {
+            headers: { Authorization: `Bearer ${accessToken}` }
+          }).then((response) => response.json())
+        )
+      );
+      const streak = dates.map((date, index) => {
+        const day = new Date(date);
+        const label = day.toLocaleDateString('en-US', { weekday: 'short' }).slice(0, 1);
+        return { day: label, completed: (responses[index]?.total || 0) > 0 };
+      });
+      setStudyStreak(streak.reverse());
+    } catch (error) {
+      console.error('Failed to fetch study streak:', error);
+    }
+  };
+
+  const fetchGoals = async () => {
+    try {
+      const response = await fetch(`${apiBase}/settings`, {
+        headers: { Authorization: `Bearer ${accessToken}` }
+      });
+      const data = await response.json();
+      if (data.settings) {
+        setDailyGoal(Number(data.settings.dailyGoal || 0));
+        setWeeklyGoal(Number(data.settings.weeklyGoal || 0));
+        setMonthlyGoal(Number(data.settings.monthlyGoal || 0));
+      }
+    } catch (error) {
+      console.error('Failed to fetch goals:', error);
+    }
+  };
+
   const handleAddTodo = async () => {
     if (!newTodo.name.trim()) {
       toast.error('Please enter a task name');
@@ -195,14 +272,17 @@ export function DashboardPage({ accessToken }: DashboardPageProps) {
         body: JSON.stringify({
           name: newTodo.name,
           subject: newTodo.subject,
-          duration: newTodo.durationMinutes * 60
+          duration: newTodo.durationMinutes * 60,
+          plannedDuration: newTodo.durationMinutes * 60,
+          actualDuration: 0,
+          shared: newTodo.shared
         })
       });
       const data = await response.json();
       
       if (data.todo) {
         setTodos([...todos, data.todo]);
-        setNewTodo({ name: '', subject: '', durationMinutes: 0 });
+        setNewTodo({ name: '', subject: '', durationMinutes: 0, shared: false });
         setIsAddDialogOpen(false);
         toast.success('🎉 Todo added!');
       }
@@ -252,7 +332,34 @@ export function DashboardPage({ accessToken }: DashboardPageProps) {
     }
   };
 
+  const handleToggleShared = async (todo: Todo, shared: boolean) => {
+    try {
+      const response = await fetch(`${apiBase}/todos/${todo.id}`, {
+        method: 'PUT',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${accessToken}`
+        },
+        body: JSON.stringify({ ...todo, shared })
+      });
+      const data = await response.json();
+      if (data.todo) {
+        setTodos(todos.map(t => t.id === todo.id ? data.todo : t));
+        toast.success(shared ? 'Shared with friends' : 'Sharing turned off');
+      }
+    } catch (error) {
+      console.error('Failed to update todo sharing:', error);
+      toast.error('Failed to update sharing');
+    }
+  };
+
   const startTimer = (todoId: string) => {
+    const timerState = {
+      todoId,
+      startTime: Date.now(),
+      baseSeconds: 0
+    };
+    localStorage.setItem(TIMER_STORAGE_KEY, JSON.stringify(timerState));
     setActiveTimer(todoId);
     setTimerSeconds(0);
   };
@@ -260,13 +367,20 @@ export function DashboardPage({ accessToken }: DashboardPageProps) {
   const stopTimer = async (todo: Todo) => {
     if (activeTimer === todo.id) {
       try {
+        const raw = localStorage.getItem(TIMER_STORAGE_KEY);
+        const stored = raw ? JSON.parse(raw) : null;
+        const elapsedSeconds =
+          stored && stored.todoId === todo.id
+            ? stored.baseSeconds + Math.floor((Date.now() - stored.startTime) / 1000)
+            : timerSeconds;
+
         await fetch(`${apiBase}/study-time`, {
           method: 'POST',
           headers: {
             'Content-Type': 'application/json',
             Authorization: `Bearer ${accessToken}`
           },
-          body: JSON.stringify({ duration: timerSeconds })
+          body: JSON.stringify({ duration: elapsedSeconds })
         });
         
         await fetch(`${apiBase}/todos/${todo.id}`, {
@@ -275,17 +389,23 @@ export function DashboardPage({ accessToken }: DashboardPageProps) {
             'Content-Type': 'application/json',
             Authorization: `Bearer ${accessToken}`
           },
-          body: JSON.stringify({ ...todo, duration: (todo.duration || 0) + timerSeconds })
+          body: JSON.stringify({
+            ...todo,
+            duration: todo.plannedDuration ?? todo.duration ?? 0,
+            plannedDuration: todo.plannedDuration ?? todo.duration ?? 0,
+            actualDuration: (todo.actualDuration || 0) + elapsedSeconds
+          })
         });
         
-        setDailyTotal(prev => prev + timerSeconds);
+        setDailyTotal(prev => prev + elapsedSeconds);
         fetchTodos();
         fetchWeeklyMonthlyStudyTime();
-        toast.success(`🎯 Logged ${Math.floor(timerSeconds / 60)} minutes!`);
+        toast.success(`🎯 Logged ${Math.floor(elapsedSeconds / 60)} minutes!`);
       } catch (error) {
         console.error('Failed to save study time:', error);
       }
       
+      localStorage.removeItem(TIMER_STORAGE_KEY);
       setActiveTimer(null);
       setTimerSeconds(0);
     }
@@ -298,6 +418,20 @@ export function DashboardPage({ accessToken }: DashboardPageProps) {
       return `${hours}h ${minutes}m`;
     }
     return `${minutes}m`;
+  };
+
+  const getPlannedSeconds = (todo: Todo) => {
+    return todo.plannedDuration ?? todo.duration ?? 0;
+  };
+
+  const getActualSeconds = (todo: Todo) => {
+    return todo.actualDuration ?? 0;
+  };
+
+  const getProgressPercent = (todo: Todo) => {
+    const planned = getPlannedSeconds(todo);
+    if (planned <= 0) return 0;
+    return Math.min((getActualSeconds(todo) / planned) * 100, 100);
   };
 
   const getPercentage = (current: number, goal: number) => {
@@ -331,23 +465,70 @@ export function DashboardPage({ accessToken }: DashboardPageProps) {
     setIsGoalDialogOpen(true);
   };
 
-  const saveGoal = () => {
+  const saveGoal = async () => {
     if (!editingGoal) return;
     const nextSeconds = parseGoalTime(goalTimeInput);
     if (nextSeconds === null) {
       toast.error('Use time format like 08:30');
       return;
     }
-    if (editingGoal === 'daily') setDailyGoal(nextSeconds);
-    if (editingGoal === 'weekly') setWeeklyGoal(nextSeconds);
-    if (editingGoal === 'monthly') setMonthlyGoal(nextSeconds);
-    setIsGoalDialogOpen(false);
-    setEditingGoal(null);
-    toast.success('Goal updated');
+    const nextGoals = {
+      dailyGoal: editingGoal === 'daily' ? nextSeconds : dailyGoal,
+      weeklyGoal: editingGoal === 'weekly' ? nextSeconds : weeklyGoal,
+      monthlyGoal: editingGoal === 'monthly' ? nextSeconds : monthlyGoal
+    };
+    try {
+      const response = await fetch(`${apiBase}/settings`, {
+        method: 'PUT',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${accessToken}`
+        },
+        body: JSON.stringify(nextGoals)
+      });
+      const data = await response.json();
+      if (data.settings) {
+        setDailyGoal(Number(data.settings.dailyGoal || 0));
+        setWeeklyGoal(Number(data.settings.weeklyGoal || 0));
+        setMonthlyGoal(Number(data.settings.monthlyGoal || 0));
+        setIsGoalDialogOpen(false);
+        setEditingGoal(null);
+        toast.success('Goal updated');
+      } else {
+        toast.error('Failed to update goal');
+      }
+    } catch (error) {
+      console.error('Failed to save goal:', error);
+      toast.error('Failed to update goal');
+    }
   };
 
   const getInitials = (name: string) => {
     return name.split(' ').map(n => n[0]).join('');
+  };
+
+  const getActivityStatus = (friend: Friend) => {
+    if (!friend.lastActivityAt) {
+      return { label: 'Inactive', isOnline: false };
+    }
+    const last = new Date(friend.lastActivityAt).getTime();
+    if (Number.isNaN(last)) {
+      return { label: 'Inactive', isOnline: false };
+    }
+    const diffSeconds = Math.floor((Date.now() - last) / 1000);
+    if (diffSeconds < 300) {
+      return { label: 'Online', isOnline: true };
+    }
+    const diffMinutes = Math.floor(diffSeconds / 60);
+    if (diffMinutes < 60) {
+      return { label: `${diffMinutes}m ago`, isOnline: false };
+    }
+    const diffHours = Math.floor(diffMinutes / 60);
+    if (diffHours < 24) {
+      return { label: `${diffHours}h ago`, isOnline: false };
+    }
+    const diffDays = Math.floor(diffHours / 24);
+    return { label: `${diffDays}d ago`, isOnline: false };
   };
 
   const openEditDialog = (todo: Todo) => {
@@ -355,7 +536,8 @@ export function DashboardPage({ accessToken }: DashboardPageProps) {
     setEditTodo({
       name: todo.name,
       subject: todo.subject,
-      durationMinutes: Math.floor((todo.duration || 0) / 60)
+      durationMinutes: Math.floor((todo.duration || 0) / 60),
+      shared: Boolean(todo.shared)
     });
     setIsEditDialogOpen(true);
   };
@@ -379,7 +561,10 @@ export function DashboardPage({ accessToken }: DashboardPageProps) {
           ...existing,
           name: editTodo.name,
           subject: editTodo.subject,
-          duration: editTodo.durationMinutes * 60
+          duration: editTodo.durationMinutes * 60,
+          plannedDuration: editTodo.durationMinutes * 60,
+          actualDuration: existing.actualDuration || 0,
+          shared: editTodo.shared
         })
       });
       const data = await response.json();
@@ -722,6 +907,17 @@ export function DashboardPage({ accessToken }: DashboardPageProps) {
                           }))}
                         />
                       </div>
+                      <div className="flex items-center justify-between rounded-lg border border-gray-100 p-3">
+                        <div>
+                          <p className="text-sm font-medium text-gray-900">Share with friends</p>
+                          <p className="text-xs text-muted-foreground">Visible on your friend detail page</p>
+                        </div>
+                        <Switch
+                          checked={Boolean(newTodo.shared)}
+                          onCheckedChange={(checked) => setNewTodo(prev => ({ ...prev, shared: checked }))}
+                          className="data-[state=unchecked]:bg-gray-200 data-[state=checked]:bg-teal-600"
+                        />
+                      </div>
                       <div className="flex justify-end gap-2">
                         <Button variant="ghost" onClick={() => setIsAddDialogOpen(false)}>
                           Cancel
@@ -738,7 +934,12 @@ export function DashboardPage({ accessToken }: DashboardPageProps) {
                 </div>
               ) : (
                 <ul className="space-y-2">
-                  {todos.map((todo) => (
+                  {todos.map((todo) => {
+                    const plannedSeconds = getPlannedSeconds(todo);
+                    const actualSeconds = getActualSeconds(todo);
+                    const progressPercent = getProgressPercent(todo);
+
+                    return (
                     <li key={todo.id} className="flex items-center justify-between gap-3 rounded-lg border border-gray-100 p-3">
                       <div className="flex items-center gap-3">
                         <button
@@ -758,10 +959,27 @@ export function DashboardPage({ accessToken }: DashboardPageProps) {
                           <p className="text-xs text-gray-500">
                             {todo.subject ? todo.subject : 'No subject'}
                             {' • '}
-                            {formatTime(todo.duration || 0)}
+                            {formatTime(plannedSeconds)}
+                            {todo.shared ? ' • Shared' : ''}
                           </p>
+                          <div className="mt-2">
+                            <div className="h-2 w-40 bg-gray-200 rounded-full">
+                              <div
+                                className="h-2 rounded-full bg-teal-600"
+                                style={{ width: `${progressPercent}%` }}
+                              />
+                            </div>
+                            <p className="text-[11px] text-gray-500 mt-1">
+                              {formatTime(actualSeconds)} / {formatTime(plannedSeconds)}
+                            </p>
+                          </div>
                         </div>
                       </div>
+                      <Switch
+                        checked={Boolean(todo.shared)}
+                        onCheckedChange={(checked) => handleToggleShared(todo, checked)}
+                        className="data-[state=unchecked]:bg-gray-200 data-[state=checked]:bg-teal-600"
+                      />
                       <div className="flex items-center gap-1">
                         {activeTimer === todo.id ? (
                           <Button size="icon" variant="ghost" onClick={() => stopTimer(todo)}>
@@ -780,7 +998,8 @@ export function DashboardPage({ accessToken }: DashboardPageProps) {
                         </Button>
                       </div>
                     </li>
-                  ))}
+                  );
+                  })}
                 </ul>
               )}
               <Dialog
@@ -824,6 +1043,17 @@ export function DashboardPage({ accessToken }: DashboardPageProps) {
                         }))}
                       />
                     </div>
+                    <div className="flex items-center justify-between rounded-lg border border-gray-100 p-3">
+                      <div>
+                        <p className="text-sm font-medium text-gray-900">Share with friends</p>
+                        <p className="text-xs text-muted-foreground">Visible on your friend detail page</p>
+                      </div>
+                      <Switch
+                        checked={Boolean(editTodo.shared)}
+                        onCheckedChange={(checked) => setEditTodo(prev => ({ ...prev, shared: checked }))}
+                        className="data-[state=unchecked]:bg-gray-200 data-[state=checked]:bg-teal-600"
+                      />
+                    </div>
                     <div className="flex justify-end gap-2">
                       <Button
                         variant="ghost"
@@ -851,17 +1081,24 @@ export function DashboardPage({ accessToken }: DashboardPageProps) {
               <CardTitle className="text-base font-bold text-gray-900">Nearby Study Rooms</CardTitle>
             </CardHeader>
             <CardContent className="space-y-2">
-              {nearbyRooms.map((room) => (
-                <button 
-                  key={room.id} 
-                  className="w-full flex items-center gap-3 p-3 bg-gray-50 rounded-lg hover:bg-gray-100 transition-colors text-left"
-                >
-                  <div className="w-8 h-8 bg-white rounded-lg flex items-center justify-center text-lg">
-                    {room.icon}
-                  </div>
-                  <span className="text-sm font-medium text-gray-900">{room.topic}</span>
-                </button>
-              ))}
+              {nearbyRooms.length === 0 ? (
+                <p className="text-sm text-muted-foreground">No study rooms yet.</p>
+              ) : (
+                nearbyRooms.map((room) => (
+                  <button
+                    key={room.id}
+                    className="w-full flex items-center gap-3 p-3 bg-gray-50 rounded-lg hover:bg-gray-100 transition-colors text-left"
+                  >
+                    <div className="w-8 h-8 bg-white rounded-lg flex items-center justify-center text-lg">
+                      {room.icon || '📚'}
+                    </div>
+                    <div>
+                      <span className="text-sm font-medium text-gray-900">{room.topic}</span>
+                      <p className="text-xs text-muted-foreground">{room.location}</p>
+                    </div>
+                  </button>
+                ))
+              )}
             </CardContent>
           </Card>
 
@@ -871,24 +1108,37 @@ export function DashboardPage({ accessToken }: DashboardPageProps) {
               <CardTitle className="text-base font-bold text-gray-900">Friends</CardTitle>
             </CardHeader>
             <CardContent className="space-y-3">
-              {friends.map((friend) => (
-                <div key={friend.id} className="flex items-center justify-between">
-                  <div className="flex items-center gap-3">
-                    <Avatar className="size-8">
-                      <AvatarFallback className="bg-gray-200 text-gray-700 text-xs font-semibold">
-                        {getInitials(friend.name)}
-                      </AvatarFallback>
-                    </Avatar>
-                    <div>
-                      <h4 className="text-sm font-medium text-gray-900">{friend.name}</h4>
-                      <p className="text-xs text-gray-500">{friend.lastActivity}</p>
+              {friends.length === 0 ? (
+                <p className="text-sm text-muted-foreground">No friends to show.</p>
+              ) : (
+                friends.map((friend) => {
+                  const status = getActivityStatus(friend);
+
+                  return (
+                  <div key={friend.id} className="flex items-center justify-between">
+                    <div className="flex items-center gap-3">
+                      <Avatar className="size-8">
+                        <AvatarFallback className="bg-gray-200 text-gray-700 text-xs font-semibold">
+                          {getInitials(friend.username || friend.email || 'F')}
+                        </AvatarFallback>
+                      </Avatar>
+                      <div>
+                        <h4 className="text-sm font-medium text-gray-900">
+                          {friend.username || 'Unknown'}
+                        </h4>
+                        <p className="text-xs text-gray-500">{status.label}</p>
+                      </div>
                     </div>
+                    <Badge
+                      variant="secondary"
+                      className={`text-xs ${status.isOnline ? 'bg-emerald-100 text-emerald-700' : 'bg-gray-100 text-gray-600'}`}
+                    >
+                      {status.isOnline ? 'Online' : 'Offline'}
+                    </Badge>
                   </div>
-                  <Badge variant="secondary" className="bg-pink-100 text-pink-700 text-xs">
-                    Chat
-                  </Badge>
-                </div>
-              ))}
+                );
+                })
+              )}
             </CardContent>
           </Card>
 

@@ -74,6 +74,11 @@ const kvGetByPrefix = async (prefix) => {
   return data?.map((row) => row.value) ?? [];
 };
 
+const toNumber = (value, fallback = 0) => {
+  const num = Number(value);
+  return Number.isFinite(num) ? num : fallback;
+};
+
 const requireUser = async (req) => {
   const authHeader = req.header("Authorization") || "";
   const token = authHeader.startsWith("Bearer ") ? authHeader.slice(7) : "";
@@ -102,6 +107,10 @@ app.post("/auth/signup", async (req, res) => {
       category,
       profileImageUrl: "",
       profileImagePosition: "center",
+      dailyGoal: 0,
+      weeklyGoal: 0,
+      monthlyGoal: 0,
+      lastActivityAt: null,
       classes: [],
       preferences: {},
       allowTodoView: false,
@@ -161,14 +170,26 @@ app.get("/todos", async (req, res) => {
 app.post("/todos", async (req, res) => {
   try {
     const user = await requireUser(req);
-    const { name, subject, duration = 0 } = req.body ?? {};
+    const {
+      name,
+      subject,
+      duration = 0,
+      plannedDuration,
+      actualDuration,
+      shared = false,
+    } = req.body ?? {};
+    const plannedSeconds = toNumber(plannedDuration, toNumber(duration, 0));
+    const actualSeconds = toNumber(actualDuration, 0);
     const todoId = crypto.randomUUID();
     const todo = {
       id: todoId,
       userId: user.id,
       name,
       subject,
-      duration,
+      duration: plannedSeconds,
+      plannedDuration: plannedSeconds,
+      actualDuration: actualSeconds,
+      shared: Boolean(shared),
       completed: false,
       createdAt: new Date().toISOString(),
     };
@@ -185,7 +206,22 @@ app.put("/todos/:id", async (req, res) => {
     const todoId = req.params.id;
     const existing = await kvGet(`todo:${user.id}:${todoId}`);
     if (!existing) return res.status(404).json({ error: "Todo not found" });
-    const updated = { ...existing, ...(req.body ?? {}) };
+    const plannedSeconds = toNumber(
+      req.body?.plannedDuration ?? req.body?.duration ?? existing.plannedDuration ?? existing.duration,
+      toNumber(existing.duration, 0)
+    );
+    const actualSeconds = toNumber(
+      req.body?.actualDuration ?? existing.actualDuration,
+      0
+    );
+    const updated = {
+      ...existing,
+      ...(req.body ?? {}),
+      duration: plannedSeconds,
+      plannedDuration: plannedSeconds,
+      actualDuration: actualSeconds,
+      shared: Boolean(req.body?.shared ?? existing.shared),
+    };
     await kvSet(`todo:${user.id}:${todoId}`, updated);
     return res.json({ todo: updated });
   } catch {
@@ -212,6 +248,13 @@ app.post("/study-time", async (req, res) => {
     const existing = (await kvGet(`study-time:${user.id}:${dateKey}`)) || { total: 0 };
     existing.total += duration;
     await kvSet(`study-time:${user.id}:${dateKey}`, existing);
+    const userProfile = await kvGet(`user:${user.id}`);
+    if (userProfile) {
+      await kvSet(`user:${user.id}`, {
+        ...userProfile,
+        lastActivityAt: new Date().toISOString(),
+      });
+    }
     return res.json({ total: existing.total });
   } catch {
     return res.status(401).json({ error: "Unauthorized" });
@@ -538,6 +581,23 @@ app.get("/friends/:id/activity", async (req, res) => {
       activity.push({ date: dateKey, total: data.total });
     }
     return res.json({ activity });
+  } catch {
+    return res.status(401).json({ error: "Unauthorized" });
+  }
+});
+
+app.get("/friends/:id/todos", async (req, res) => {
+  try {
+    await requireUser(req);
+    const friendId = req.params.id;
+    const friendProfile = await kvGet(`user:${friendId}`);
+    if (!friendProfile) return res.status(404).json({ error: "User not found" });
+    if (!friendProfile.allowTodoView) {
+      return res.status(403).json({ error: "Todo sharing is disabled" });
+    }
+    const todos = await kvGetByPrefix(`todo:${friendId}:`);
+    const sharedTodos = (todos || []).filter((todo) => todo.shared);
+    return res.json({ todos: sharedTodos });
   } catch {
     return res.status(401).json({ error: "Unauthorized" });
   }
