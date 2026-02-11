@@ -1,0 +1,505 @@
+import { useState, useEffect } from 'react';
+import { Button } from './ui/button';
+import { Input } from './ui/input';
+import { Label } from './ui/label';
+import { Card, CardContent, CardHeader, CardTitle } from './ui/card';
+import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger } from './ui/dialog';
+import { Clock, Plus, Trash2, Play, Pause, CheckCircle2, Flame, Trophy, Target, Sparkles, MessageCircle, MapPin, Users, TrendingUp, Calendar, Search, Bell, User as UserIcon } from 'lucide-react';
+import { toast } from 'sonner';
+import { Avatar, AvatarFallback } from './ui/avatar';
+import { Badge } from './ui/badge';
+import { apiBase } from '../utils/api';
+
+interface Todo {
+  id: string;
+  name: string;
+  subject: string;
+  duration: number;
+  completed: boolean;
+  completedAt?: string;
+}
+
+interface DashboardPageProps {
+  accessToken: string;
+}
+
+interface Friend {
+  id: string;
+  name: string;
+  lastActivity: string;
+  status: 'online' | 'offline';
+  studyTime: number;
+}
+
+interface StudyRoom {
+  id: string;
+  topic: string;
+  location: string;
+  time: string;
+  participants: number;
+  maxParticipants: number;
+  icon: string;
+}
+
+export function DashboardPage({ accessToken }: DashboardPageProps) {
+  const [todos, setTodos] = useState<Todo[]>([]);
+  const [dailyTotal, setDailyTotal] = useState(45900); // 12h 45m in seconds
+  const [weeklyTotal, setWeeklyTotal] = useState(18000); // 5 hours
+  const [monthlyTotal, setMonthlyTotal] = useState(86400); // 24 hours
+  const [isAddDialogOpen, setIsAddDialogOpen] = useState(false);
+  const [activeTimer, setActiveTimer] = useState<string | null>(null);
+  const [timerSeconds, setTimerSeconds] = useState(0);
+  
+  // Goals
+  const dailyGoal = 57600; // 16 hours
+  const weeklyGoal = 36000; // 10 hours
+  const monthlyGoal = 144000; // 40 hours
+
+  // Mock friends data
+  const [friends] = useState<Friend[]>([
+    { id: '1', name: 'Olivia', lastActivity: 'Online', status: 'online', studyTime: 7200 },
+    { id: '2', name: 'Catherine', lastActivity: 'Online', status: 'online', studyTime: 5400 },
+    { id: '3', name: 'Cate Huh', lastActivity: 'Online', status: 'online', studyTime: 3600 },
+    { id: '4', name: 'Ismenrd', lastActivity: 'Online', status: 'online', studyTime: 9000 },
+  ]);
+
+  // Mock nearby study rooms
+  const [nearbyRooms] = useState<StudyRoom[]>([
+    { id: '1', topic: 'Library Quiet Zone', location: 'Library', time: '', participants: 0, maxParticipants: 0, icon: '📚' },
+    { id: '2', topic: 'University Annex', location: 'Annex', time: '', participants: 0, maxParticipants: 0, icon: '🏛️' },
+    { id: '3', topic: 'University Annex', location: 'Annex B', time: '', participants: 0, maxParticipants: 0, icon: '🏫' },
+  ]);
+
+  // Today's tasks
+  const [todayTasks] = useState([
+    'Math Homework',
+    'Project Research',
+  ]);
+
+  // Study streak calendar (7 days)
+  const [studyStreak] = useState([
+    { day: 'M', completed: true },
+    { day: 'T', completed: true },
+    { day: 'W', completed: true },
+    { day: 'T', completed: true },
+    { day: 'F', completed: true },
+    { day: 'S', completed: false },
+    { day: 'S', completed: false },
+  ]);
+  
+  const [newTodo, setNewTodo] = useState({
+    name: '',
+    subject: '',
+    duration: 0
+  });
+
+  useEffect(() => {
+    fetchTodos();
+    fetchDailyStudyTime();
+  }, []);
+
+  useEffect(() => {
+    let interval: number | undefined;
+    if (activeTimer) {
+      interval = setInterval(() => {
+        setTimerSeconds(prev => prev + 1);
+      }, 1000);
+    }
+    return () => {
+      if (interval) clearInterval(interval);
+    };
+  }, [activeTimer]);
+
+  const fetchTodos = async () => {
+    try {
+      const response = await fetch(`${apiBase}/todos`, {
+        headers: { Authorization: `Bearer ${accessToken}` }
+      });
+      const data = await response.json();
+      setTodos(data.todos || []);
+    } catch (error) {
+      console.error('Failed to fetch todos:', error);
+    }
+  };
+
+  const fetchDailyStudyTime = async () => {
+    try {
+      const today = new Date().toISOString().split('T')[0];
+      const response = await fetch(`${apiBase}/study-time/${today}`, {
+        headers: { Authorization: `Bearer ${accessToken}` }
+      });
+      const data = await response.json();
+      if (data.total > 0) {
+        setDailyTotal(data.total);
+      }
+    } catch (error) {
+      console.error('Failed to fetch study time:', error);
+    }
+  };
+
+  const handleAddTodo = async () => {
+    try {
+      const response = await fetch(`${apiBase}/todos`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${accessToken}`
+        },
+        body: JSON.stringify(newTodo)
+      });
+      const data = await response.json();
+      
+      if (data.todo) {
+        setTodos([...todos, data.todo]);
+        setNewTodo({ name: '', subject: '', duration: 0 });
+        setIsAddDialogOpen(false);
+        toast.success('🎉 Todo added!');
+      }
+    } catch (error) {
+      console.error('Failed to add todo:', error);
+      toast.error('Failed to add todo');
+    }
+  };
+
+  const handleDeleteTodo = async (id: string) => {
+    try {
+      await fetch(`${apiBase}/todos/${id}`, {
+        method: 'DELETE',
+        headers: { Authorization: `Bearer ${accessToken}` }
+      });
+      setTodos(todos.filter(t => t.id !== id));
+      toast.success('Todo deleted');
+    } catch (error) {
+      console.error('Failed to delete todo:', error);
+    }
+  };
+
+  const handleToggleComplete = async (todo: Todo) => {
+    try {
+      const response = await fetch(`${apiBase}/todos/${todo.id}`, {
+        method: 'PUT',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${accessToken}`
+        },
+        body: JSON.stringify({ 
+          ...todo, 
+          completed: !todo.completed,
+          completedAt: !todo.completed ? new Date().toISOString() : undefined
+        })
+      });
+      const data = await response.json();
+      
+      if (data.todo) {
+        setTodos(todos.map(t => t.id === todo.id ? data.todo : t));
+        if (!todo.completed) {
+          toast.success('✨ Task completed!');
+        }
+      }
+    } catch (error) {
+      console.error('Failed to update todo:', error);
+    }
+  };
+
+  const startTimer = (todoId: string) => {
+    setActiveTimer(todoId);
+    setTimerSeconds(0);
+  };
+
+  const stopTimer = async (todo: Todo) => {
+    if (activeTimer === todo.id) {
+      try {
+        await fetch(`${apiBase}/study-time`, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            Authorization: `Bearer ${accessToken}`
+          },
+          body: JSON.stringify({ duration: timerSeconds })
+        });
+        
+        await fetch(`${apiBase}/todos/${todo.id}`, {
+          method: 'PUT',
+          headers: {
+            'Content-Type': 'application/json',
+            Authorization: `Bearer ${accessToken}`
+          },
+          body: JSON.stringify({ ...todo, duration: (todo.duration || 0) + timerSeconds })
+        });
+        
+        setDailyTotal(prev => prev + timerSeconds);
+        fetchTodos();
+        toast.success(`🎯 Logged ${Math.floor(timerSeconds / 60)} minutes!`);
+      } catch (error) {
+        console.error('Failed to save study time:', error);
+      }
+      
+      setActiveTimer(null);
+      setTimerSeconds(0);
+    }
+  };
+
+  const formatTime = (seconds: number) => {
+    const hours = Math.floor(seconds / 3600);
+    const minutes = Math.floor((seconds % 3600) / 60);
+    if (hours > 0) {
+      return `${hours}h ${minutes}m`;
+    }
+    return `${minutes}m`;
+  };
+
+  const getPercentage = (current: number, goal: number) => {
+    return Math.min((current / goal) * 100, 100);
+  };
+
+  const getInitials = (name: string) => {
+    return name.split(' ').map(n => n[0]).join('');
+  };
+
+  return (
+    <div className="space-y-6">
+      {/* Top Header */}
+      <div className="flex items-center justify-between">
+        <div></div>
+        <div className="flex items-center gap-3">
+          <button className="p-2 hover:bg-gray-100 rounded-lg transition-colors">
+            <Search className="size-5 text-gray-600" />
+          </button>
+          <button className="p-2 hover:bg-gray-100 rounded-lg transition-colors">
+            <Bell className="size-5 text-gray-600" />
+          </button>
+          <button className="p-2 hover:bg-gray-100 rounded-lg transition-colors">
+            <UserIcon className="size-5 text-gray-600" />
+          </button>
+        </div>
+      </div>
+
+      <div className="grid grid-cols-1 lg:grid-cols-12 gap-6">
+        {/* Left Column - Main Content */}
+        <div className="lg:col-span-8 space-y-6">
+          {/* Total Study Time */}
+          <Card className="bg-white border-0 shadow-sm">
+            <CardContent className="p-6">
+              <div className="space-y-2">
+                <p className="text-sm text-gray-600 font-medium">Total study time</p>
+                <h1 className="text-5xl font-bold text-gray-900">{formatTime(dailyTotal)}</h1>
+                <div className="w-32 h-1 bg-teal-400 rounded-full mt-3"></div>
+              </div>
+            </CardContent>
+          </Card>
+
+          {/* Goal Cards */}
+          <div className="grid grid-cols-3 gap-4">
+            {/* Daily Goal */}
+            <Card className="bg-gradient-to-br from-[#ffc9d9] to-[#ffb3c6] border-0 shadow-sm">
+              <CardContent className="p-5">
+                <div className="space-y-4">
+                  <div className="flex items-center justify-between">
+                    <div>
+                      <p className="text-xs font-semibold text-gray-900 mb-1">Daily Goal</p>
+                      <p className="text-sm font-bold text-gray-900">(80%)</p>
+                    </div>
+                  </div>
+                  <div className="relative w-20 h-20 mx-auto">
+                    <svg className="transform -rotate-90 w-20 h-20">
+                      <circle
+                        cx="40"
+                        cy="40"
+                        r="32"
+                        stroke="#ffffff80"
+                        strokeWidth="6"
+                        fill="none"
+                      />
+                      <circle
+                        cx="40"
+                        cy="40"
+                        r="32"
+                        stroke="#000000"
+                        strokeWidth="6"
+                        fill="none"
+                        strokeDasharray={`${2 * Math.PI * 32}`}
+                        strokeDashoffset={`${2 * Math.PI * 32 * (1 - 0.8)}`}
+                        strokeLinecap="round"
+                      />
+                    </svg>
+                    <div className="absolute inset-0 flex items-center justify-center">
+                      <span className="text-xl font-bold text-gray-900">80%</span>
+                    </div>
+                  </div>
+                </div>
+              </CardContent>
+            </Card>
+
+            {/* Weekly Goal */}
+            <Card className="bg-gradient-to-br from-[#ffeaa7] to-[#fdcb6e] border-0 shadow-sm">
+              <CardContent className="p-5">
+                <div className="space-y-4">
+                  <div className="flex items-center justify-between">
+                    <div>
+                      <p className="text-xs font-semibold text-gray-900 mb-1">Weekly Goal</p>
+                      <p className="text-sm font-bold text-gray-900">(45%)</p>
+                    </div>
+                  </div>
+                  <div className="relative w-20 h-20 mx-auto">
+                    <svg className="transform -rotate-90 w-20 h-20">
+                      <circle
+                        cx="40"
+                        cy="40"
+                        r="32"
+                        stroke="#ffffff80"
+                        strokeWidth="6"
+                        fill="none"
+                      />
+                      <circle
+                        cx="40"
+                        cy="40"
+                        r="32"
+                        stroke="#000000"
+                        strokeWidth="6"
+                        fill="none"
+                        strokeDasharray={`${2 * Math.PI * 32}`}
+                        strokeDashoffset={`${2 * Math.PI * 32 * (1 - 0.45)}`}
+                        strokeLinecap="round"
+                      />
+                    </svg>
+                    <div className="absolute inset-0 flex items-center justify-center">
+                      <span className="text-xl font-bold text-gray-900">45%</span>
+                    </div>
+                  </div>
+                </div>
+              </CardContent>
+            </Card>
+
+            {/* Monthly Goal */}
+            <Card className="bg-gradient-to-br from-[#81ecec] to-[#00b894] border-0 shadow-sm">
+              <CardContent className="p-5">
+                <div className="space-y-4">
+                  <div className="flex items-center justify-between">
+                    <div>
+                      <p className="text-xs font-semibold text-gray-900 mb-1">Monthly Goal</p>
+                      <p className="text-sm font-bold text-gray-900">(60%)</p>
+                    </div>
+                  </div>
+                  <div className="relative w-20 h-20 mx-auto">
+                    <svg className="transform -rotate-90 w-20 h-20">
+                      <circle
+                        cx="40"
+                        cy="40"
+                        r="32"
+                        stroke="#ffffff80"
+                        strokeWidth="6"
+                        fill="none"
+                      />
+                      <circle
+                        cx="40"
+                        cy="40"
+                        r="32"
+                        stroke="#000000"
+                        strokeWidth="6"
+                        fill="none"
+                        strokeDasharray={`${2 * Math.PI * 32}`}
+                        strokeDashoffset={`${2 * Math.PI * 32 * (1 - 0.6)}`}
+                        strokeLinecap="round"
+                      />
+                    </svg>
+                    <div className="absolute inset-0 flex items-center justify-center">
+                      <span className="text-xl font-bold text-gray-900">60%</span>
+                    </div>
+                  </div>
+                </div>
+              </CardContent>
+            </Card>
+          </div>
+
+          {/* Today's Tasks */}
+          <Card className="bg-white border-0 shadow-sm">
+            <CardContent className="p-6">
+              <h3 className="text-base font-bold text-gray-900 mb-4">Today's Tasks</h3>
+              <ul className="space-y-2">
+                {todayTasks.map((task, index) => (
+                  <li key={index} className="flex items-center gap-2 text-sm text-gray-700">
+                    <span className="text-gray-400">•</span>
+                    {task}
+                  </li>
+                ))}
+              </ul>
+            </CardContent>
+          </Card>
+        </div>
+
+        {/* Right Column - Sidebar Content */}
+        <div className="lg:col-span-4 space-y-6">
+          {/* Nearby Study Rooms */}
+          <Card className="bg-white border-0 shadow-sm">
+            <CardHeader className="pb-3">
+              <CardTitle className="text-base font-bold text-gray-900">Nearby Study Rooms</CardTitle>
+            </CardHeader>
+            <CardContent className="space-y-2">
+              {nearbyRooms.map((room) => (
+                <button 
+                  key={room.id} 
+                  className="w-full flex items-center gap-3 p-3 bg-gray-50 rounded-lg hover:bg-gray-100 transition-colors text-left"
+                >
+                  <div className="w-8 h-8 bg-white rounded-lg flex items-center justify-center text-lg">
+                    {room.icon}
+                  </div>
+                  <span className="text-sm font-medium text-gray-900">{room.topic}</span>
+                </button>
+              ))}
+            </CardContent>
+          </Card>
+
+          {/* Friends */}
+          <Card className="bg-white border-0 shadow-sm">
+            <CardHeader className="pb-3">
+              <CardTitle className="text-base font-bold text-gray-900">Friends</CardTitle>
+            </CardHeader>
+            <CardContent className="space-y-3">
+              {friends.map((friend) => (
+                <div key={friend.id} className="flex items-center justify-between">
+                  <div className="flex items-center gap-3">
+                    <Avatar className="size-8">
+                      <AvatarFallback className="bg-gray-200 text-gray-700 text-xs font-semibold">
+                        {getInitials(friend.name)}
+                      </AvatarFallback>
+                    </Avatar>
+                    <div>
+                      <h4 className="text-sm font-medium text-gray-900">{friend.name}</h4>
+                      <p className="text-xs text-gray-500">{friend.lastActivity}</p>
+                    </div>
+                  </div>
+                  <Badge variant="secondary" className="bg-pink-100 text-pink-700 text-xs">
+                    Chat
+                  </Badge>
+                </div>
+              ))}
+            </CardContent>
+          </Card>
+
+          {/* Study Streak */}
+          <Card className="bg-white border-0 shadow-sm">
+            <CardHeader className="pb-3">
+              <CardTitle className="text-base font-bold text-gray-900">Study Streak</CardTitle>
+            </CardHeader>
+            <CardContent>
+              <div className="grid grid-cols-7 gap-2">
+                {studyStreak.map((day, index) => (
+                  <div key={index} className="flex flex-col items-center gap-1">
+                    <span className="text-xs text-gray-500 font-medium">{day.day}</span>
+                    <div className={`w-8 h-8 rounded-lg flex items-center justify-center ${
+                      day.completed ? 'bg-green-100' : 'bg-gray-100'
+                    }`}>
+                      {day.completed && (
+                        <CheckCircle2 className="size-4 text-green-600" />
+                      )}
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </CardContent>
+          </Card>
+        </div>
+      </div>
+    </div>
+  );
+}
