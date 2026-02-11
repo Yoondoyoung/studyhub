@@ -33,11 +33,12 @@ interface StudyRoomPageProps {
   groupId: string;
   accessToken: string;
   onBack: () => void;
+  onLeaveRoom?: () => void;
 }
 
 const auth = (token: string) => ({ Authorization: `Bearer ${token}` });
 
-export function StudyRoomPage({ groupId, accessToken, onBack }: StudyRoomPageProps) {
+export function StudyRoomPage({ groupId, accessToken, onBack, onLeaveRoom }: StudyRoomPageProps) {
   const [group, setGroup] = useState<Group | null>(null);
   const [loading, setLoading] = useState(true);
   const [presence, setPresence] = useState<Participant[]>([]);
@@ -109,6 +110,7 @@ export function StudyRoomPage({ groupId, accessToken, onBack }: StudyRoomPagePro
       } catch (_) {}
       joinedRef.current = false;
     }
+    onLeaveRoom?.();
     onBack();
   };
 
