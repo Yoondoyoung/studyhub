@@ -29,6 +29,7 @@ interface StudyGroupsPageProps {
   accessToken: string;
   userId: string;
   currentUserUsername?: string;
+  roomUserIsIn?: string | null;
   onJoinRoom: (groupId: string) => void;
 }
 
@@ -75,7 +76,7 @@ const defaultGroupForm = {
   duration: '2 hours'
 };
 
-export function StudyGroupsPage({ accessToken, userId, currentUserUsername, onJoinRoom }: StudyGroupsPageProps) {
+export function StudyGroupsPage({ accessToken, userId, currentUserUsername, roomUserIsIn, onJoinRoom }: StudyGroupsPageProps) {
   const [groups, setGroups] = useState<StudyGroup[]>([]);
   const [isCreateDialogOpen, setIsCreateDialogOpen] = useState(false);
   const [editingGroup, setEditingGroup] = useState<StudyGroup | null>(null);
@@ -547,6 +548,11 @@ export function StudyGroupsPage({ accessToken, userId, currentUserUsername, onJo
                               Your Room
                             </Badge>
                           )}
+                          {roomUserIsIn === group.id && !isHost && (
+                            <Badge className="mt-1 bg-teal-600 text-white border-0">
+                              You&apos;re in this room
+                            </Badge>
+                          )}
                         </div>
                       </div>
                     </div>
@@ -627,7 +633,7 @@ export function StudyGroupsPage({ accessToken, userId, currentUserUsername, onJo
                   {isMeetingStarted && (isHost || isMember || !isFull) && (
                     <Button
                       className="w-full bg-teal-600 text-white hover:bg-teal-700 font-semibold"
-                      disabled={isFull}
+                      disabled={isFull && !isHost && !isMember}
                       onClick={() => onJoinRoom(group.id)}
                     >
                       <Video className="size-4 mr-2" />

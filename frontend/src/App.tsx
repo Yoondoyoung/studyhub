@@ -65,6 +65,7 @@ export default function App() {
   const [selectedFriend, setSelectedFriend] = useState<Friend | null>(null);
   const [sessionChecked, setSessionChecked] = useState(false);
   const [currentGroupId, setCurrentGroupId] = useState<string | null>(null);
+  const [roomUserIsIn, setRoomUserIsIn] = useState<string | null>(null);
 
   useEffect(() => {
     checkSession();
@@ -80,8 +81,10 @@ export default function App() {
     if (!accessToken) return;
     const syncHash = () => {
       const page = getPageFromHash();
+      const gid = page === 'room' ? getGroupIdFromHash() : null;
       setCurrentPage(page);
-      setCurrentGroupId(page === 'room' ? getGroupIdFromHash() : null);
+      setCurrentGroupId(gid);
+      if (page === 'room' && gid) setRoomUserIsIn(gid);
     };
     syncHash();
     window.addEventListener('hashchange', syncHash);
@@ -99,6 +102,7 @@ export default function App() {
     window.location.hash = `room-${groupId}`;
     setCurrentPage('room');
     setCurrentGroupId(groupId);
+    setRoomUserIsIn(groupId);
   };
 
   const checkSession = async () => {
@@ -376,6 +380,7 @@ export default function App() {
               accessToken={accessToken}
               userId={user?.id || ''}
               currentUserUsername={user?.username}
+              roomUserIsIn={roomUserIsIn}
               onJoinRoom={navigateToRoom}
             />
           )}
@@ -384,6 +389,7 @@ export default function App() {
               groupId={currentGroupId}
               accessToken={accessToken}
               onBack={() => navigateTo('study-groups')}
+              onLeaveRoom={() => setRoomUserIsIn(null)}
             />
           )}
           {currentPage === 'solo-study' && <SoloStudyPage />}
