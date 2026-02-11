@@ -9,6 +9,7 @@ import { FriendsPage } from './components/FriendsPage';
 import { FriendDetailPage } from './components/FriendDetailPage';
 import { SettingsPage } from './components/SettingsPage';
 import { ProfilePage } from './components/ProfilePage';
+import { StudyRoomPage } from './components/StudyRoomPage';
 import { Toaster } from './components/ui/sonner';
 import { Avatar, AvatarFallback, AvatarImage } from './components/ui/avatar';
 import { 
@@ -22,14 +23,21 @@ import {
 } from 'lucide-react';
 import { toast } from 'sonner';
 
-type Page = 'login' | 'register' | 'dashboard' | 'study-groups' | 'solo-study' | 'friends' | 'settings' | 'profile' | 'friend-detail';
+type Page = 'login' | 'register' | 'dashboard' | 'study-groups' | 'solo-study' | 'friends' | 'settings' | 'profile' | 'friend-detail' | 'room';
 
 const APP_PAGES: Page[] = ['dashboard', 'study-groups', 'solo-study', 'friends', 'settings'];
 
 function getPageFromHash(): Page {
   const hash = window.location.hash.slice(1);
+  if (hash.startsWith('room-')) return 'room';
   if (APP_PAGES.includes(hash as Page)) return hash as Page;
   return 'dashboard';
+}
+
+function getGroupIdFromHash(): string | null {
+  const hash = window.location.hash.slice(1);
+  if (hash.startsWith('room-')) return hash.slice(5);
+  return null;
 }
 
 interface User {
@@ -56,6 +64,7 @@ export default function App() {
   const [prototypeMode, setPrototypeMode] = useState(false);
   const [selectedFriend, setSelectedFriend] = useState<Friend | null>(null);
   const [sessionChecked, setSessionChecked] = useState(false);
+  const [currentGroupId, setCurrentGroupId] = useState<string | null>(null);
 
   useEffect(() => {
     checkSession();
@@ -69,14 +78,27 @@ export default function App() {
 
   useEffect(() => {
     if (!accessToken) return;
-    const onHashChange = () => setCurrentPage(getPageFromHash());
-    window.addEventListener('hashchange', onHashChange);
-    return () => window.removeEventListener('hashchange', onHashChange);
+    const syncHash = () => {
+      const page = getPageFromHash();
+      setCurrentPage(page);
+      setCurrentGroupId(page === 'room' ? getGroupIdFromHash() : null);
+    };
+    syncHash();
+    window.addEventListener('hashchange', syncHash);
+    return () => window.removeEventListener('hashchange', syncHash);
   }, [accessToken]);
 
   const navigateTo = (page: Page) => {
+    if (page === 'room') return;
     if (APP_PAGES.includes(page)) window.location.hash = page;
     setCurrentPage(page);
+    setCurrentGroupId(null);
+  };
+
+  const navigateToRoom = (groupId: string) => {
+    window.location.hash = `room-${groupId}`;
+    setCurrentPage('room');
+    setCurrentGroupId(groupId);
   };
 
   const checkSession = async () => {
@@ -91,7 +113,9 @@ export default function App() {
         if (data.user) {
           setAccessToken(savedToken);
           setUser(data.user);
-          setCurrentPage(getPageFromHash());
+          const page = getPageFromHash();
+          setCurrentPage(page);
+          setCurrentGroupId(page === 'room' ? getGroupIdFromHash() : null);
         } else {
           localStorage.removeItem('accessToken');
         }
@@ -351,6 +375,14 @@ export default function App() {
             <StudyGroupsPage
               accessToken={accessToken}
               userId={user?.id || ''}
+              onJoinRoom={navigateToRoom}
+            />
+          )}
+          {currentPage === 'room' && currentGroupId && (
+            <StudyRoomPage
+              groupId={currentGroupId}
+              accessToken={accessToken}
+              onBack={() => navigateTo('study-groups')}
             />
           )}
           {currentPage === 'solo-study' && <SoloStudyPage />}

@@ -220,6 +220,83 @@ app.get("/study-groups", async (_req, res) => {
   }
 });
 
+app.get("/study-groups/:id", async (req, res) => {
+  try {
+    await requireUser(req);
+    const groupId = req.params.id;
+    const group = await kvGet(`study-group:${groupId}`);
+    if (!group) return res.status(404).json({ error: "Group not found" });
+    const participantsWithNames = [];
+    for (const id of group.participants || []) {
+      const profile = await kvGet(`user:${id}`);
+      participantsWithNames.push({
+        id,
+        username: profile?.username ?? profile?.email ?? id.slice(0, 8),
+      });
+    }
+    return res.json({ group: { ...group, participantsWithNames } });
+  } catch (err) {
+    if (String(err?.message).includes("Unauthorized"))
+      return res.status(401).json({ error: "Unauthorized" });
+    return res.status(500).json({ error: String(err?.message ?? err) });
+  }
+});
+
+app.get("/study-groups/:id/presence", async (req, res) => {
+  try {
+    await requireUser(req);
+    const groupId = req.params.id;
+    const group = await kvGet(`study-group:${groupId}`);
+    if (!group) return res.status(404).json({ error: "Group not found" });
+    const presence = (await kvGet(`room-presence:${groupId}`)) || { users: [] };
+    return res.json({ presence: presence.users });
+  } catch (err) {
+    if (String(err?.message).includes("Unauthorized"))
+      return res.status(401).json({ error: "Unauthorized" });
+    return res.status(500).json({ error: String(err?.message ?? err) });
+  }
+});
+
+app.post("/study-groups/:id/presence", async (req, res) => {
+  try {
+    const user = await requireUser(req);
+    const groupId = req.params.id;
+    const group = await kvGet(`study-group:${groupId}`);
+    if (!group) return res.status(404).json({ error: "Group not found" });
+    const participantIds = group.participants || [];
+    if (!participantIds.includes(user.id))
+      return res.status(403).json({ error: "Not a participant of this room" });
+    const profile = await kvGet(`user:${user.id}`);
+    const username = profile?.username ?? profile?.email ?? user.id?.slice(0, 8) ?? "User";
+    const presence = (await kvGet(`room-presence:${groupId}`)) || { users: [] };
+    const existing = presence.users.find((u) => u.id === user.id);
+    if (!existing) {
+      presence.users.push({ id: user.id, username });
+    }
+    await kvSet(`room-presence:${groupId}`, presence);
+    return res.json({ presence: presence.users });
+  } catch (err) {
+    if (String(err?.message).includes("Unauthorized"))
+      return res.status(401).json({ error: "Unauthorized" });
+    return res.status(500).json({ error: String(err?.message ?? err) });
+  }
+});
+
+app.delete("/study-groups/:id/presence", async (req, res) => {
+  try {
+    const user = await requireUser(req);
+    const groupId = req.params.id;
+    let presence = (await kvGet(`room-presence:${groupId}`)) || { users: [] };
+    presence.users = (presence.users || []).filter((u) => u.id !== user.id);
+    await kvSet(`room-presence:${groupId}`, presence);
+    return res.json({ presence: presence.users });
+  } catch (err) {
+    if (String(err?.message).includes("Unauthorized"))
+      return res.status(401).json({ error: "Unauthorized" });
+    return res.status(500).json({ error: String(err?.message ?? err) });
+  }
+});
+
 app.post("/study-groups", async (req, res) => {
   try {
     const user = await requireUser(req);
