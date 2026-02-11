@@ -117,11 +117,10 @@ export default function App() {
   };
 
   const handleLogout = () => {
+    localStorage.removeItem('accessToken');
     setAccessToken(null);
     setUser(null);
-    localStorage.removeItem('accessToken');
     setCurrentPage('login');
-    toast.success('Logged out successfully');
   };
 
   if (!accessToken) {
@@ -218,6 +217,10 @@ export default function App() {
           >
             <Settings className="size-4" />
             <span className="font-medium">Settings</span>
+          </button>
+          <button onClick={handleLogout} className="w-full flex items-center gap-3 px-3 py-2.5 rounded-lg text-sm text-gray-500 hover:bg-gray-50">
+            <LogOut className="size-4" />
+            <span>Log out</span>
           </button>
         </div>
       </aside>
