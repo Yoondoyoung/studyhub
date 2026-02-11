@@ -234,6 +234,7 @@ app.get("/study-groups", async (_req, res) => {
     const raw = await kvGetByPrefix("study-group:");
     const groups = [];
     for (const group of raw) {
+      if (applyNoShowCleanup(group)) await kvSet(`study-group:${group.id}`, group);
       const hostProfile = group.hostId ? await kvGet(`user:${group.hostId}`) : null;
       const hostUsername = hostProfile?.username ?? hostProfile?.email ?? (group.hostId?.slice(0, 8) ?? "—");
       groups.push({ ...group, hostUsername });
@@ -250,6 +251,7 @@ app.get("/study-groups/:id", async (req, res) => {
     const groupId = req.params.id;
     const group = await kvGet(`study-group:${groupId}`);
     if (!group) return res.status(404).json({ error: "Group not found" });
+    if (applyNoShowCleanup(group)) await kvSet(`study-group:${groupId}`, group);
     const participantsWithNames = [];
     for (const id of group.participants || []) {
       const profile = await kvGet(`user:${id}`);
@@ -288,8 +290,15 @@ app.post("/study-groups/:id/presence", async (req, res) => {
     const group = await kvGet(`study-group:${groupId}`);
     if (!group) return res.status(404).json({ error: "Group not found" });
     const participantIds = group.participants || [];
-    if (!participantIds.includes(user.id))
-      return res.status(403).json({ error: "Not a participant of this room" });
+    const hasSeats = participantIds.length < (group.maxParticipants || 0);
+    const isParticipant = participantIds.includes(user.id);
+    if (!isParticipant && !hasSeats)
+      return res.status(403).json({ error: "Room is full" });
+    if (!isParticipant && hasSeats) {
+      group.participants = group.participants || [];
+      group.participants.push(user.id);
+      await kvSet(`study-group:${groupId}`, group);
+    }
     const profile = await kvGet(`user:${user.id}`);
     const username = profile?.username ?? profile?.email ?? user.id?.slice(0, 8) ?? "User";
     const presence = (await kvGet(`room-presence:${groupId}`)) || { users: [] };
@@ -298,6 +307,11 @@ app.post("/study-groups/:id/presence", async (req, res) => {
       presence.users.push({ id: user.id, username });
     }
     await kvSet(`room-presence:${groupId}`, presence);
+    if (!group.participantFirstJoinAt) group.participantFirstJoinAt = {};
+    if (!group.participantFirstJoinAt[user.id]) {
+      group.participantFirstJoinAt[user.id] = new Date().toISOString();
+      await kvSet(`study-group:${groupId}`, group);
+    }
     return res.json({ presence: presence.users });
   } catch (err) {
     if (String(err?.message).includes("Unauthorized"))
@@ -306,6 +320,19 @@ app.post("/study-groups/:id/presence", async (req, res) => {
   }
 });
 
+const NO_SHOW_MINUTES = 15;
+
+function applyNoShowCleanup(group) {
+  if (!group || !group.date || !group.participants?.length) return false;
+  const meetingStart = new Date(`${group.date}T${group.time || "00:00"}`);
+  const cutoff = new Date(meetingStart.getTime() + NO_SHOW_MINUTES * 60 * 1000);
+  if (new Date() < cutoff) return false;
+  const firstJoin = group.participantFirstJoinAt || {};
+  const before = group.participants.length;
+  group.participants = group.participants.filter((id) => firstJoin[id] != null);
+  return group.participants.length !== before;
+}
+
 app.delete("/study-groups/:id/presence", async (req, res) => {
   try {
     const user = await requireUser(req);
@@ -313,6 +340,11 @@ app.delete("/study-groups/:id/presence", async (req, res) => {
     let presence = (await kvGet(`room-presence:${groupId}`)) || { users: [] };
     presence.users = (presence.users || []).filter((u) => u.id !== user.id);
     await kvSet(`room-presence:${groupId}`, presence);
+    const group = await kvGet(`study-group:${groupId}`);
+    if (group && Array.isArray(group.participants)) {
+      group.participants = group.participants.filter((id) => id !== user.id);
+      await kvSet(`study-group:${groupId}`, group);
+    }
     return res.json({ presence: presence.users });
   } catch (err) {
     if (String(err?.message).includes("Unauthorized"))
