@@ -57,6 +57,14 @@ interface Friend {
   profileImageUrl?: string;
 }
 
+interface StudySession {
+  id: string;
+  name: string;
+  fileCount: number;
+  messageCount: number;
+  updatedAt: string;
+}
+
 export default function App() {
   const [currentPage, setCurrentPage] = useState<Page>('login');
   const [accessToken, setAccessToken] = useState<string | null>(null);
@@ -65,6 +73,9 @@ export default function App() {
   const [selectedFriend, setSelectedFriend] = useState<Friend | null>(null);
   const [sessionChecked, setSessionChecked] = useState(false);
   const [currentGroupId, setCurrentGroupId] = useState<string | null>(null);
+  const [aiStudySessions, setAiStudySessions] = useState<StudySession[]>([]);
+  const [showAiStudyDropdown, setShowAiStudyDropdown] = useState(false);
+  const [selectedSessionId, setSelectedSessionId] = useState<string | null>(null);
 
   useEffect(() => {
     checkSession();
@@ -213,6 +224,39 @@ export default function App() {
       .toUpperCase();
   };
 
+  const loadAiStudySessions = async () => {
+    try {
+      if (!accessToken) return;
+      const response = await fetch(`${apiBase}/ai/sessions`, {
+        headers: { Authorization: `Bearer ${accessToken}` }
+      });
+      if (response.ok) {
+        const data = await response.json();
+        setAiStudySessions(data.sessions || []);
+      }
+    } catch (error) {
+      console.error('Failed to load AI study sessions:', error);
+    }
+  };
+
+  const handleAiStudyClick = () => {
+    setSelectedSessionId(null); // null means create new session
+    navigateTo('solo-study');
+  };
+
+  const handleSessionSelect = (sessionId: string) => {
+    setSelectedSessionId(sessionId);
+    setShowAiStudyDropdown(false);
+    navigateTo('solo-study');
+  };
+
+  // Load AI study sessions when user is logged in
+  useEffect(() => {
+    if (accessToken) {
+      loadAiStudySessions();
+    }
+  }, [accessToken]);
+
   if (!sessionChecked) {
     return (
       <div className="min-h-screen flex items-center justify-center bg-[#f5f5f7]">
@@ -281,17 +325,53 @@ export default function App() {
             <span className="font-medium">Study Groups</span>
           </button>
           
-          <button
-            onClick={() => navigateTo('solo-study')}
-            className={`w-full flex items-center gap-3 px-3 py-2.5 rounded-lg transition-all text-sm ${
-              currentPage === 'solo-study'
-                ? 'bg-gray-100 text-gray-900'
-                : 'text-gray-600 hover:bg-gray-50 hover:text-gray-900'
-            }`}
-          >
-            <BookOpen className="size-4" />
-            <span className="font-medium">AI Study</span>
-          </button>
+          <div>
+            <button
+              onMouseEnter={() => {
+                setShowAiStudyDropdown(true);
+                loadAiStudySessions();
+              }}
+              onClick={handleAiStudyClick}
+              className={`w-full flex items-center gap-3 px-3 py-2.5 rounded-lg transition-all text-sm ${
+                currentPage === 'solo-study'
+                  ? 'bg-gray-100 text-gray-900'
+                  : 'text-gray-600 hover:bg-gray-50 hover:text-gray-900'
+              }`}
+            >
+              <BookOpen className="size-4" />
+              <span className="font-medium">AI Study</span>
+            </button>
+
+            {/* Expanded session list with animation */}
+            {showAiStudyDropdown && aiStudySessions.length > 0 && (
+              <div 
+                className="pl-6 space-y-0.5 mt-1 overflow-hidden"
+                onMouseLeave={() => setShowAiStudyDropdown(false)}
+                style={{
+                  animation: 'slideDown 0.2s ease-out'
+                }}
+              >
+                {aiStudySessions.map((session, index) => (
+                  <button
+                    key={session.id}
+                    onClick={() => handleSessionSelect(session.id)}
+                    className="w-full text-left px-3 py-2 rounded-md hover:bg-gray-50 transition-all duration-150 text-xs"
+                    style={{ 
+                      animation: `fadeInSlide 0.3s ease-out ${index * 0.05}s forwards`,
+                      opacity: 0
+                    }}
+                  >
+                    <p className="font-medium text-gray-700 truncate">
+                      {session.name.replace('Study Session - ', '')}
+                    </p>
+                    <p className="text-gray-500 mt-0.5">
+                      {session.fileCount}f • {session.messageCount}m
+                    </p>
+                  </button>
+                ))}
+              </div>
+            )}
+          </div>
           
           <button
             onClick={() => navigateTo('friends')}
@@ -386,7 +466,12 @@ export default function App() {
               onBack={() => navigateTo('study-groups')}
             />
           )}
-          {currentPage === 'solo-study' && <SoloStudyPage />}
+          {currentPage === 'solo-study' && (
+            <SoloStudyPage 
+              initialSessionId={selectedSessionId}
+              onSessionsChange={loadAiStudySessions}
+            />
+          )}
           {currentPage === 'friends' && (
             <FriendsPage
               accessToken={accessToken}

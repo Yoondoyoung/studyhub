@@ -3,7 +3,7 @@ import { Button } from './ui/button';
 import { Card, CardContent, CardHeader, CardTitle } from './ui/card';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from './ui/tabs';
 import { Textarea } from './ui/textarea';
-import { Upload, BookOpen, GraduationCap, Loader2, Mic, MicOff } from 'lucide-react';
+import { Upload, BookOpen, GraduationCap, Loader2, Mic, MicOff, X, Plus, FileText } from 'lucide-react';
 import { toast } from 'sonner';
 import { apiBase } from '../utils/api';
 
@@ -12,11 +12,36 @@ interface Message {
   content: string;
 }
 
-export function SoloStudyPage() {
+interface FileData {
+  id: string;
+  fileName: string;
+  fileType: string;
+  preview?: string;
+}
+
+interface Session {
+  id: string;
+  name: string;
+  fileCount: number;
+  messageCount: number;
+  createdAt: string;
+  updatedAt: string;
+  files?: FileData[];
+  chatHistory?: Message[];
+}
+
+interface SoloStudyPageProps {
+  initialSessionId?: string | null;
+  onSessionsChange?: () => void;
+}
+
+export function SoloStudyPage({ initialSessionId, onSessionsChange }: SoloStudyPageProps) {
   const [mode, setMode] = useState<'teach' | 'student'>('student');
   const [messages, setMessages] = useState<Message[]>([]);
   const [input, setInput] = useState('');
-  const [uploadedFile, setUploadedFile] = useState<string | null>(null);
+  const [currentSession, setCurrentSession] = useState<Session | null>(null);
+  const [sessions, setSessions] = useState<Session[]>([]);
+  const [uploadedFiles, setUploadedFiles] = useState<FileData[]>([]);
   const [isLoading, setIsLoading] = useState(false);
   const [isUploading, setIsUploading] = useState(false);
   const [isRecording, setIsRecording] = useState(false);
@@ -25,14 +50,30 @@ export function SoloStudyPage() {
   const mediaRecorderRef = useRef<MediaRecorder | null>(null);
   const audioChunksRef = useRef<Blob[]>([]);
 
-  // Load active material on mount
+  // Load session on mount (but don't auto-create)
   useEffect(() => {
-    const loadActiveMaterial = async () => {
+    const initializeSession = async () => {
       try {
         const token = localStorage.getItem('accessToken');
         if (!token) return;
 
-        const response = await fetch(`${apiBase}/ai/material`, {
+        // If initialSessionId is provided and not null, load that session
+        if (initialSessionId !== undefined && initialSessionId !== null) {
+          await loadSession(initialSessionId);
+          return;
+        }
+
+        // If initialSessionId is explicitly null (from "AI Study" direct click)
+        // Don't create session yet - wait for user action
+        if (initialSessionId === null) {
+          setCurrentSession(null);
+          setUploadedFiles([]);
+          setMessages([]);
+          return;
+        }
+
+        // Otherwise, try to load active session (page refresh case)
+        const response = await fetch(`${apiBase}/ai/sessions/active/current`, {
           headers: {
             'Authorization': `Bearer ${token}`,
           },
@@ -40,21 +81,144 @@ export function SoloStudyPage() {
 
         if (response.ok) {
           const data = await response.json();
-          if (data.material) {
-            setUploadedFile(data.material.fileName);
+          if (data.session) {
+            setCurrentSession(data.session);
+            setUploadedFiles(data.session.files || []);
+            
+            // Convert chat history to messages format
+            if (data.session.chatHistory) {
+              const convertedMessages: Message[] = data.session.chatHistory.map((msg: any) => ({
+                role: msg.role === 'assistant' ? 'ai' : msg.role,
+                content: msg.content
+              }));
+              setMessages(convertedMessages);
+            }
           }
+          // If no active session, just leave it empty
         }
+
+        // Load session history
+        await loadSessions();
       } catch (error) {
-        console.error('Failed to load material:', error);
+        console.error('Failed to initialize session:', error);
       }
     };
 
-    loadActiveMaterial();
-  }, []);
+    initializeSession();
+  }, [initialSessionId]);
+
+  const loadSessions = async () => {
+    try {
+      const token = localStorage.getItem('accessToken');
+      if (!token) return;
+
+      const response = await fetch(`${apiBase}/ai/sessions`, {
+        headers: {
+          'Authorization': `Bearer ${token}`,
+        },
+      });
+
+      if (response.ok) {
+        const data = await response.json();
+        setSessions(data.sessions || []);
+        onSessionsChange?.(); // Notify parent to update
+      }
+    } catch (error) {
+      console.error('Failed to load sessions:', error);
+    }
+  };
+
+  const createNewSession = async () => {
+    try {
+      const token = localStorage.getItem('accessToken');
+      if (!token) {
+        toast.error('Please login first');
+        return null;
+      }
+
+      const response = await fetch(`${apiBase}/ai/sessions`, {
+        method: 'POST',
+        headers: {
+          'Authorization': `Bearer ${token}`,
+        },
+      });
+
+      if (response.ok) {
+        const data = await response.json();
+        setCurrentSession(data.session);
+        setUploadedFiles([]);
+        setMessages([]);
+        toast.success('New study session created!');
+        await loadSessions();
+        onSessionsChange?.(); // Notify parent
+        return data.session;
+      }
+      return null;
+    } catch (error) {
+      console.error('Failed to create session:', error);
+      toast.error('Failed to create new session');
+      return null;
+    }
+  };
+
+  // Helper: Ensure session exists (create if needed)
+  const ensureSession = async (): Promise<Session | null> => {
+    if (currentSession) return currentSession;
+    return await createNewSession();
+  };
+
+  const loadSession = async (sessionId: string) => {
+    try {
+      const token = localStorage.getItem('accessToken');
+      if (!token) return;
+
+      const response = await fetch(`${apiBase}/ai/sessions/${sessionId}`, {
+        headers: {
+          'Authorization': `Bearer ${token}`,
+        },
+      });
+
+      if (response.ok) {
+        const data = await response.json();
+        
+        // Set as active session
+        await fetch(`${apiBase}/ai/sessions/${sessionId}/activate`, {
+          method: 'POST',
+          headers: {
+            'Authorization': `Bearer ${token}`,
+          },
+        });
+
+        setCurrentSession(data.session);
+        setUploadedFiles(data.session.files || []);
+        
+        // Convert chat history
+        if (data.session.chatHistory) {
+          const convertedMessages: Message[] = data.session.chatHistory.map((msg: any) => ({
+            role: msg.role === 'assistant' ? 'ai' : msg.role,
+            content: msg.content
+          }));
+          setMessages(convertedMessages);
+        } else {
+          setMessages([]);
+        }
+
+        toast.success('Session loaded!');
+      }
+    } catch (error) {
+      console.error('Failed to load session:', error);
+      toast.error('Failed to load session');
+    }
+  };
 
   const handleFileUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file) return;
+
+    if (uploadedFiles.length >= 3) {
+      toast.error('Maximum 3 files per session');
+      return;
+    }
 
     setIsUploading(true);
 
@@ -65,10 +229,17 @@ export function SoloStudyPage() {
         return;
       }
 
+      // Ensure session exists
+      const session = await ensureSession();
+      if (!session) {
+        toast.error('Failed to create session');
+        return;
+      }
+
       const formData = new FormData();
       formData.append('file', file);
 
-      const response = await fetch(`${apiBase}/ai/upload`, {
+      const response = await fetch(`${apiBase}/ai/sessions/${session.id}/upload`, {
         method: 'POST',
         headers: {
           'Authorization': `Bearer ${token}`,
@@ -82,16 +253,43 @@ export function SoloStudyPage() {
       }
 
       const data = await response.json();
-      setUploadedFile(data.fileName);
-      toast.success(`Uploaded: ${data.fileName}`);
+      setUploadedFiles(prev => [...prev, data.file]);
+      toast.success(`Uploaded: ${data.file.fileName} (${uploadedFiles.length + 1}/3)`);
       
-      // Clear previous messages when new material is uploaded
-      setMessages([]);
+      // Reload sessions to update file count
+      await loadSessions();
     } catch (error) {
       console.error('Upload error:', error);
       toast.error(error instanceof Error ? error.message : 'Failed to upload file');
     } finally {
       setIsUploading(false);
+      // Clear the file input
+      e.target.value = '';
+    }
+  };
+
+  const handleFileDelete = async (fileId: string) => {
+    if (!currentSession) return;
+
+    try {
+      const token = localStorage.getItem('accessToken');
+      if (!token) return;
+
+      const response = await fetch(`${apiBase}/ai/sessions/${currentSession.id}/files/${fileId}`, {
+        method: 'DELETE',
+        headers: {
+          'Authorization': `Bearer ${token}`,
+        },
+      });
+
+      if (response.ok) {
+        setUploadedFiles(prev => prev.filter(f => f.id !== fileId));
+        toast.success('File removed');
+        await loadSessions();
+      }
+    } catch (error) {
+      console.error('Delete error:', error);
+      toast.error('Failed to delete file');
     }
   };
 
@@ -100,6 +298,7 @@ export function SoloStudyPage() {
 
     const userMessage: Message = { role: 'user', content: input };
     setMessages([...messages, userMessage]);
+    const currentInput = input;
     setInput('');
     setIsLoading(true);
 
@@ -111,14 +310,22 @@ export function SoloStudyPage() {
         return;
       }
 
-      const response = await fetch(`${apiBase}/ai/chat`, {
+      // Ensure session exists
+      const session = await ensureSession();
+      if (!session) {
+        toast.error('Failed to create session');
+        setIsLoading(false);
+        return;
+      }
+
+      const response = await fetch(`${apiBase}/ai/sessions/${session.id}/chat`, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
           'Authorization': `Bearer ${token}`,
         },
         body: JSON.stringify({
-          message: input,
+          message: currentInput,
           mode: mode,
         }),
       });
@@ -131,6 +338,9 @@ export function SoloStudyPage() {
       const data = await response.json();
       const aiMessage: Message = { role: 'ai', content: data.response };
       setMessages(prev => [...prev, aiMessage]);
+      
+      // Update sessions list to reflect new message count
+      await loadSessions();
     } catch (error) {
       console.error('Chat error:', error);
       toast.error(error instanceof Error ? error.message : 'Failed to get AI response');
@@ -202,11 +412,18 @@ export function SoloStudyPage() {
         return;
       }
 
+      // Ensure session exists
+      const session = await ensureSession();
+      if (!session) {
+        toast.error('Failed to create session');
+        return;
+      }
+
       const formData = new FormData();
       formData.append('audio', audioBlob, 'recording.webm');
       formData.append('mode', mode);
 
-      const response = await fetch(`${apiBase}/ai/voice-chat`, {
+      const response = await fetch(`${apiBase}/ai/sessions/${session.id}/voice-chat`, {
         method: 'POST',
         headers: {
           'Authorization': `Bearer ${token}`,
@@ -246,6 +463,7 @@ export function SoloStudyPage() {
       }
 
       toast.success('Voice message processed!');
+      await loadSessions();
     } catch (error) {
       console.error('Voice message error:', error);
       toast.error(error instanceof Error ? error.message : 'Failed to process voice message');
@@ -265,43 +483,102 @@ export function SoloStudyPage() {
       <div className="flex justify-between items-center">
         <h1 className="text-3xl font-bold">AI Study Assistant</h1>
         <div className="flex items-center gap-2">
-          <label htmlFor="file-upload">
-            <Button variant="outline" asChild disabled={isUploading}>
-              <span className="cursor-pointer">
-                {isUploading ? (
-                  <>
-                    <Loader2 className="size-4 mr-2 animate-spin" />
-                    Uploading...
-                  </>
-                ) : (
-                  <>
-                    <Upload className="size-4 mr-2" />
-                    Upload Materials
-                  </>
-                )}
-              </span>
-            </Button>
-          </label>
-          <input
-            id="file-upload"
-            type="file"
-            accept=".pdf,.txt,.md,.png,.jpg,.jpeg,.gif,.webp,.mp3,.wav,.m4a,.mp4,.webm,text/plain,application/pdf,image/*,audio/*"
-            className="hidden"
-            onChange={handleFileUpload}
-            disabled={isUploading}
-          />
+          <Button 
+            variant="outline" 
+            onClick={createNewSession}
+            disabled={isLoading || isUploading}
+          >
+            <Plus className="size-4 mr-2" />
+            New Study
+          </Button>
         </div>
       </div>
 
-      {uploadedFile && (
+      {/* Current Session Info */}
+      {currentSession && (
         <Card className="bg-blue-50 border-blue-200">
           <CardContent className="py-3 px-4">
-            <p className="text-sm">
-              <span className="font-medium">Active Material:</span> {uploadedFile}
-            </p>
+            <div className="flex justify-between items-center">
+              <p className="text-sm font-medium">
+                Current Session: {currentSession.name}
+              </p>
+              <p className="text-xs text-muted-foreground">
+                {uploadedFiles.length}/3 files
+              </p>
+            </div>
           </CardContent>
         </Card>
       )}
+
+      {/* File Upload Area */}
+      <Card>
+        <CardHeader>
+          <div className="flex justify-between items-center">
+            <CardTitle className="text-lg">Study Materials ({uploadedFiles.length}/3)</CardTitle>
+            <label htmlFor="file-upload">
+              <Button 
+                variant="outline" 
+                size="sm" 
+                asChild 
+                disabled={isUploading || uploadedFiles.length >= 3}
+              >
+                <span className="cursor-pointer">
+                  {isUploading ? (
+                    <>
+                      <Loader2 className="size-4 mr-2 animate-spin" />
+                      Uploading...
+                    </>
+                  ) : (
+                    <>
+                      <Upload className="size-4 mr-2" />
+                      Upload File
+                    </>
+                  )}
+                </span>
+              </Button>
+            </label>
+            <input
+              id="file-upload"
+              type="file"
+              accept=".pdf,.txt,.md,.png,.jpg,.jpeg,.gif,.webp,.mp3,.wav,.m4a,.mp4,.webm,text/plain,application/pdf,image/*,audio/*"
+              className="hidden"
+              onChange={handleFileUpload}
+              disabled={isUploading || uploadedFiles.length >= 3}
+            />
+          </div>
+        </CardHeader>
+        <CardContent>
+          {uploadedFiles.length === 0 ? (
+            <div className="text-center py-8 text-muted-foreground">
+              <FileText className="size-12 mx-auto mb-2 opacity-50" />
+              <p className="text-sm">No files uploaded yet. Upload up to 3 files to get started!</p>
+            </div>
+          ) : (
+            <div className="space-y-2">
+              {uploadedFiles.map((file) => (
+                <div
+                  key={file.id}
+                  className="flex items-center justify-between p-3 bg-gray-50 rounded-lg border"
+                >
+                  <div className="flex items-center gap-2">
+                    <FileText className="size-4 text-blue-600" />
+                    <span className="text-sm font-medium">{file.fileName}</span>
+                    <span className="text-xs text-muted-foreground">({file.fileType})</span>
+                  </div>
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    onClick={() => handleFileDelete(file.id)}
+                    className="hover:bg-red-100 hover:text-red-600"
+                  >
+                    <X className="size-4" />
+                  </Button>
+                </div>
+              ))}
+            </div>
+          )}
+        </CardContent>
+      </Card>
 
       <Tabs value={mode} onValueChange={(v) => setMode(v as 'teach' | 'student')}>
         <TabsList className="grid w-full grid-cols-2">
