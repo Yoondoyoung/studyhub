@@ -21,6 +21,14 @@ import { toast } from 'sonner';
 
 type Page = 'login' | 'register' | 'dashboard' | 'study-groups' | 'solo-study' | 'friends' | 'settings';
 
+const APP_PAGES: Page[] = ['dashboard', 'study-groups', 'solo-study', 'friends', 'settings'];
+
+function getPageFromHash(): Page {
+  const hash = window.location.hash.slice(1);
+  if (APP_PAGES.includes(hash as Page)) return hash as Page;
+  return 'dashboard';
+}
+
 interface User {
   id: string;
   email: string;
@@ -32,11 +40,23 @@ export default function App() {
   const [accessToken, setAccessToken] = useState<string | null>(null);
   const [user, setUser] = useState<User | null>(null);
   const [prototypeMode, setPrototypeMode] = useState(false);
+  const [sessionChecked, setSessionChecked] = useState(false);
 
   useEffect(() => {
-    // Check for existing session
     checkSession();
   }, []);
+
+  useEffect(() => {
+    if (!accessToken) return;
+    const onHashChange = () => setCurrentPage(getPageFromHash());
+    window.addEventListener('hashchange', onHashChange);
+    return () => window.removeEventListener('hashchange', onHashChange);
+  }, [accessToken]);
+
+  const navigateTo = (page: Page) => {
+    if (APP_PAGES.includes(page)) window.location.hash = page;
+    setCurrentPage(page);
+  };
 
   const checkSession = async () => {
     const savedToken = localStorage.getItem('accessToken');
@@ -50,7 +70,7 @@ export default function App() {
         if (data.user) {
           setAccessToken(savedToken);
           setUser(data.user);
-          setCurrentPage('dashboard');
+          setCurrentPage(getPageFromHash());
         } else {
           localStorage.removeItem('accessToken');
         }
@@ -61,6 +81,7 @@ export default function App() {
     } else {
       setCurrentPage('login');
     }
+    setSessionChecked(true);
   };
 
   const handleLogin = async (email: string, password: string) => {
@@ -82,7 +103,7 @@ export default function App() {
         setAccessToken(data.accessToken);
         setUser(data.user);
         localStorage.setItem('accessToken', data.accessToken);
-        setCurrentPage('dashboard');
+        navigateTo('dashboard');
         toast.success('Welcome back!');
       }
     } catch (error) {
@@ -123,6 +144,17 @@ export default function App() {
     setCurrentPage('login');
   };
 
+  if (!sessionChecked) {
+    return (
+      <div className="min-h-screen flex items-center justify-center bg-[#f5f5f7]">
+        <div className="flex flex-col items-center gap-3">
+          <GraduationCap className="size-10 text-teal-600 animate-pulse" />
+          <p className="text-sm text-gray-500">Loading...</p>
+        </div>
+      </div>
+    );
+  }
+
   if (!accessToken) {
     return (
       <>
@@ -157,7 +189,7 @@ export default function App() {
         {/* Navigation */}
         <nav className="flex-1 px-4 space-y-1">
           <button
-            onClick={() => setCurrentPage('dashboard')}
+            onClick={() => navigateTo('dashboard')}
             className={`w-full flex items-center gap-3 px-3 py-2.5 rounded-lg transition-all text-sm ${
               currentPage === 'dashboard'
                 ? 'bg-gray-100 text-gray-900'
@@ -169,7 +201,7 @@ export default function App() {
           </button>
           
           <button
-            onClick={() => setCurrentPage('study-groups')}
+            onClick={() => navigateTo('study-groups')}
             className={`w-full flex items-center gap-3 px-3 py-2.5 rounded-lg transition-all text-sm ${
               currentPage === 'study-groups'
                 ? 'bg-gray-100 text-gray-900'
@@ -181,7 +213,7 @@ export default function App() {
           </button>
           
           <button
-            onClick={() => setCurrentPage('solo-study')}
+            onClick={() => navigateTo('solo-study')}
             className={`w-full flex items-center gap-3 px-3 py-2.5 rounded-lg transition-all text-sm ${
               currentPage === 'solo-study'
                 ? 'bg-gray-100 text-gray-900'
@@ -193,7 +225,7 @@ export default function App() {
           </button>
           
           <button
-            onClick={() => setCurrentPage('friends')}
+            onClick={() => navigateTo('friends')}
             className={`w-full flex items-center gap-3 px-3 py-2.5 rounded-lg transition-all text-sm ${
               currentPage === 'friends'
                 ? 'bg-gray-100 text-gray-900'
@@ -208,7 +240,7 @@ export default function App() {
         {/* Bottom Section */}
         <div className="px-4 pb-4 space-y-1">
           <button
-            onClick={() => setCurrentPage('settings')}
+            onClick={() => navigateTo('settings')}
             className={`w-full flex items-center gap-3 px-3 py-2.5 rounded-lg transition-all text-sm ${
               currentPage === 'settings'
                 ? 'bg-gray-100 text-gray-900'

@@ -286,6 +286,20 @@ app.post("/study-groups/:id/manage", async (req, res) => {
   }
 });
 
+app.delete("/study-groups/:id", async (req, res) => {
+  try {
+    const user = await requireUser(req);
+    const groupId = req.params.id;
+    const group = await kvGet(`study-group:${groupId}`);
+    if (!group) return res.status(404).json({ error: "Group not found" });
+    if (group.hostId !== user.id) return res.status(403).json({ error: "Not authorized" });
+    await kvDel(`study-group:${groupId}`);
+    return res.json({ success: true });
+  } catch {
+    return res.status(401).json({ error: "Unauthorized" });
+  }
+});
+
 app.post("/friends/add", async (req, res) => {
   try {
     const user = await requireUser(req);
