@@ -6,7 +6,7 @@ import { Card, CardContent } from './ui/card';
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger } from './ui/dialog';
 import { Badge } from './ui/badge';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from './ui/select';
-import { MapPin, Calendar, Users, Plus, CheckCircle2, XCircle, Clock, Heart, Trash2 } from 'lucide-react';
+import { MapPin, Calendar, Users, Plus, CheckCircle2, XCircle, Clock, Heart, Trash2, Video } from 'lucide-react';
 import { toast } from 'sonner';
 import { apiBase } from '../utils/api';
 
@@ -27,6 +27,7 @@ interface StudyGroup {
 interface StudyGroupsPageProps {
   accessToken: string;
   userId: string;
+  onJoinRoom: (groupId: string) => void;
 }
 
 const pastelColors = [
@@ -62,7 +63,7 @@ const getSubjectIcon = (topic: string) => {
   return subject ? subjectIcons[subject] : subjectIcons.default;
 };
 
-export function StudyGroupsPage({ accessToken, userId }: StudyGroupsPageProps) {
+export function StudyGroupsPage({ accessToken, userId, onJoinRoom }: StudyGroupsPageProps) {
   const [groups, setGroups] = useState<StudyGroup[]>([]);
   const [isCreateDialogOpen, setIsCreateDialogOpen] = useState(false);
   const [favorites, setFavorites] = useState<Set<string>>(new Set());
@@ -361,6 +362,8 @@ export function StudyGroupsPage({ accessToken, userId }: StudyGroupsPageProps) {
             const isMember = group.participants.includes(userId);
             const hasApplied = group.applicants.includes(userId);
             const isFull = group.participants.length >= group.maxParticipants;
+            const meetingStart = new Date(`${group.date}T${group.time || '00:00'}`);
+            const isMeetingStarted = new Date() >= meetingStart;
             const colorScheme = pastelColors[index % pastelColors.length];
             const icon = getSubjectIcon(group.topic);
 
@@ -459,7 +462,17 @@ export function StudyGroupsPage({ accessToken, userId }: StudyGroupsPageProps) {
                   )}
 
                   {/* Action button */}
-                  {!isHost && !isMember && (
+                  {isMeetingStarted && (isHost || isMember) && (
+                    <Button
+                      className="w-full bg-teal-600 text-white hover:bg-teal-700 font-semibold"
+                      onClick={() => onJoinRoom(group.id)}
+                    >
+                      <Video className="size-4 mr-2" />
+                      Join
+                    </Button>
+                  )}
+
+                  {!isMeetingStarted && !isHost && !isMember && (
                     <Button
                       className="w-full bg-gray-900 text-white hover:bg-gray-800 font-semibold"
                       disabled={hasApplied || isFull}
@@ -469,9 +482,9 @@ export function StudyGroupsPage({ accessToken, userId }: StudyGroupsPageProps) {
                     </Button>
                   )}
 
-                  {isMember && !isHost && (
+                  {!isMeetingStarted && isMember && !isHost && (
                     <Button className="w-full bg-green-600 text-white hover:bg-green-700 font-semibold" disabled>
-                      ✓ Joined
+                      Accepted
                     </Button>
                   )}
 
