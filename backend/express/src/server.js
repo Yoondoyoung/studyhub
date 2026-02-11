@@ -5,7 +5,7 @@ import { createClient } from "@supabase/supabase-js";
 
 const app = express();
 app.use(cors());
-app.use(express.json());
+app.use(express.json({ limit: "5mb" }));
 
 const SUPABASE_URL = process.env.SUPABASE_URL ?? "";
 const SUPABASE_SERVICE_ROLE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY ?? "";
@@ -82,6 +82,8 @@ app.post("/auth/signup", async (req, res) => {
       username,
       userId,
       category,
+      profileImageUrl: "",
+      profileImagePosition: "center",
       classes: [],
       preferences: {},
       allowTodoView: false,
@@ -303,11 +305,35 @@ app.delete("/study-groups/:id", async (req, res) => {
 app.post("/friends/add", async (req, res) => {
   try {
     const user = await requireUser(req);
-    const { friendEmail } = req.body ?? {};
+    const { friendEmail, friendUsername } = req.body ?? {};
+
+    const normalizedUsername = String(friendUsername || "").trim().toLowerCase();
+    const normalizedEmail = String(friendEmail || "").trim().toLowerCase();
+    if (!normalizedUsername && !normalizedEmail) {
+      return res.status(400).json({ error: "Friend identifier is required" });
+    }
 
     const allUsers = await kvGetByPrefix("user:");
-    const friend = allUsers.find((u) => u.email === friendEmail);
+    const friend =
+      (normalizedUsername
+        ? allUsers.find(
+            (u) => String(u.username || "").toLowerCase() === normalizedUsername
+          )
+        : null) ||
+      (normalizedEmail
+        ? allUsers.find(
+            (u) => String(u.email || "").toLowerCase() === normalizedEmail
+          )
+        : null);
     if (!friend) return res.status(404).json({ error: "User not found" });
+    if (friend.id === user.id) {
+      return res.status(400).json({ error: "You cannot follow yourself" });
+    }
+
+    const existing = await kvGet(`friendship:${user.id}:${friend.id}`);
+    if (existing) {
+      return res.status(400).json({ error: "Already following this user" });
+    }
 
     await kvSet(`friendship:${user.id}:${friend.id}`, {
       userId: user.id,
