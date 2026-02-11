@@ -511,181 +511,442 @@ app.get("/friends/:id/activity", async (req, res) => {
   }
 });
 
-// AI Study Assistant - File Upload
-app.post("/ai/upload", upload.single("file"), async (req, res) => {
+// ============================================
+// AI Study Assistant - Session Management
+// ============================================
+
+// Helper function to process file content
+const processFileContent = async (file) => {
+  let content = "";
+  let fileType = "text";
+  let base64Data = null;
+  
+  // Handle Image files
+  if (file.mimetype.startsWith("image/")) {
+    console.log(`Processing image: ${file.originalname}, mimetype: ${file.mimetype}, size: ${file.buffer.length} bytes`);
+    
+    fileType = "image";
+    let processedBuffer = file.buffer;
+    const MAX_DIMENSION = 2048;
+    
+    const metadata = await sharp(file.buffer).metadata();
+    console.log(`Image dimensions: ${metadata.width}x${metadata.height}`);
+    
+    if (metadata.width > MAX_DIMENSION || metadata.height > MAX_DIMENSION) {
+      console.log(`Resizing image to fit within ${MAX_DIMENSION}x${MAX_DIMENSION}...`);
+      processedBuffer = await sharp(file.buffer)
+        .resize(MAX_DIMENSION, MAX_DIMENSION, {
+          fit: 'inside',
+          withoutEnlargement: true
+        })
+        .jpeg({ quality: 85 })
+        .toBuffer();
+      console.log(`Resized image size: ${processedBuffer.length} bytes`);
+    }
+    
+    base64Data = processedBuffer.toString("base64");
+    console.log("Calling OpenAI Vision API...");
+    
+    const response = await openai.chat.completions.create({
+      model: "gpt-4o-mini",
+      messages: [
+        {
+          role: "user",
+          content: [
+            {
+              type: "text",
+              text: "Please analyze this image and extract all text, diagrams, charts, and educational content. Describe everything in detail as if creating study notes from this image. Provide all responses in English only."
+            },
+            {
+              type: "image_url",
+              image_url: {
+                url: `data:image/jpeg;base64,${base64Data}`,
+                detail: "high"
+              }
+            }
+          ]
+        }
+      ],
+      max_tokens: 2000
+    });
+    
+    content = response.choices[0].message.content;
+    console.log("Image analysis completed successfully");
+  }
+  // Handle Audio files
+  else if (file.mimetype.startsWith("audio/") || file.mimetype === "video/mp4" || file.mimetype === "video/webm") {
+    fileType = "audio";
+    const transcription = await openai.audio.transcriptions.create({
+      file: new File([file.buffer], file.originalname, { type: file.mimetype }),
+      model: "whisper-1",
+    });
+    content = transcription.text;
+  }
+  // Parse PDF files
+  else if (file.mimetype === "application/pdf" || file.originalname.endsWith(".pdf")) {
+    const pdfData = await pdfParse(file.buffer);
+    content = pdfData.text;
+  } 
+  // Handle text files
+  else if (file.mimetype === "text/plain" || file.originalname.endsWith(".txt")) {
+    content = file.buffer.toString("utf-8");
+  }
+  // Handle markdown files
+  else if (file.originalname.endsWith(".md")) {
+    content = file.buffer.toString("utf-8");
+  }
+  // Try other document types
+  else if (
+    file.mimetype.includes("text") || 
+    file.originalname.endsWith(".doc") ||
+    file.originalname.endsWith(".docx")
+  ) {
+    content = file.buffer.toString("utf-8");
+  }
+  else {
+    throw new Error("Unsupported file type. Please upload text, PDF, image, or audio files.");
+  }
+
+  if (!content || content.trim().length === 0) {
+    throw new Error("File is empty or unreadable");
+  }
+
+  return { content, fileType, base64Data };
+};
+
+// Create a new study session
+app.post("/ai/sessions", async (req, res) => {
   try {
     const user = await requireUser(req);
+    
+    // Check session count and delete oldest if >= 5
+    const allSessions = await kvGetByPrefix(`ai-session:${user.id}:`);
+    if (allSessions.length >= 5) {
+      // Sort by createdAt and delete oldest
+      const sorted = allSessions.sort((a, b) => 
+        new Date(a.createdAt) - new Date(b.createdAt)
+      );
+      const oldest = sorted[0];
+      await kvDel(`ai-session:${user.id}:${oldest.id}`);
+      console.log(`Deleted oldest session: ${oldest.id}`);
+    }
+
+    const sessionId = crypto.randomUUID();
+    const now = new Date();
+    const sessionName = `Study Session - ${now.toLocaleDateString('en-US', { 
+      month: 'short', day: 'numeric', year: 'numeric', 
+      hour: '2-digit', minute: '2-digit' 
+    })}`;
+
+    const session = {
+      id: sessionId,
+      userId: user.id,
+      name: sessionName,
+      files: [],
+      chatHistory: [],
+      createdAt: now.toISOString(),
+      updatedAt: now.toISOString(),
+    };
+
+    await kvSet(`ai-session:${user.id}:${sessionId}`, session);
+    await kvSet(`active-session:${user.id}`, sessionId);
+
+    return res.json({ success: true, session });
+  } catch (err) {
+    console.error("Session creation error:", err);
+    return res.status(500).json({ error: String(err?.message ?? err) });
+  }
+});
+
+// Get all sessions for user (recent 5)
+app.get("/ai/sessions", async (req, res) => {
+  try {
+    const user = await requireUser(req);
+    const sessions = await kvGetByPrefix(`ai-session:${user.id}:`);
+    
+    // Sort by updatedAt (most recent first) and take 5
+    const sorted = sessions
+      .sort((a, b) => new Date(b.updatedAt) - new Date(a.updatedAt))
+      .slice(0, 5)
+      .map(s => ({
+        id: s.id,
+        name: s.name,
+        fileCount: s.files?.length || 0,
+        messageCount: s.chatHistory?.length || 0,
+        createdAt: s.createdAt,
+        updatedAt: s.updatedAt,
+      }));
+
+    return res.json({ sessions: sorted });
+  } catch (err) {
+    if (String(err?.message).includes("Unauthorized"))
+      return res.status(401).json({ error: "Unauthorized" });
+    return res.status(500).json({ error: String(err?.message ?? err) });
+  }
+});
+
+// Get specific session details
+app.get("/ai/sessions/:id", async (req, res) => {
+  try {
+    const user = await requireUser(req);
+    const sessionId = req.params.id;
+    const session = await kvGet(`ai-session:${user.id}:${sessionId}`);
+    
+    if (!session) {
+      return res.status(404).json({ error: "Session not found" });
+    }
+
+    return res.json({ session });
+  } catch (err) {
+    if (String(err?.message).includes("Unauthorized"))
+      return res.status(401).json({ error: "Unauthorized" });
+    return res.status(500).json({ error: String(err?.message ?? err) });
+  }
+});
+
+// Get active session
+app.get("/ai/sessions/active/current", async (req, res) => {
+  try {
+    const user = await requireUser(req);
+    const activeSessionId = await kvGet(`active-session:${user.id}`);
+    
+    if (!activeSessionId) {
+      return res.json({ session: null });
+    }
+
+    const session = await kvGet(`ai-session:${user.id}:${activeSessionId}`);
+    return res.json({ session: session || null });
+  } catch (err) {
+    if (String(err?.message).includes("Unauthorized"))
+      return res.status(401).json({ error: "Unauthorized" });
+    return res.status(500).json({ error: String(err?.message ?? err) });
+  }
+});
+
+// Set active session
+app.post("/ai/sessions/:id/activate", async (req, res) => {
+  try {
+    const user = await requireUser(req);
+    const sessionId = req.params.id;
+    const session = await kvGet(`ai-session:${user.id}:${sessionId}`);
+    
+    if (!session) {
+      return res.status(404).json({ error: "Session not found" });
+    }
+
+    await kvSet(`active-session:${user.id}`, sessionId);
+    return res.json({ success: true, session });
+  } catch (err) {
+    if (String(err?.message).includes("Unauthorized"))
+      return res.status(401).json({ error: "Unauthorized" });
+    return res.status(500).json({ error: String(err?.message ?? err) });
+  }
+});
+
+// Delete a session
+app.delete("/ai/sessions/:id", async (req, res) => {
+  try {
+    const user = await requireUser(req);
+    const sessionId = req.params.id;
+    
+    await kvDel(`ai-session:${user.id}:${sessionId}`);
+    
+    // If this was the active session, clear it
+    const activeSessionId = await kvGet(`active-session:${user.id}`);
+    if (activeSessionId === sessionId) {
+      await kvDel(`active-session:${user.id}`);
+    }
+
+    return res.json({ success: true });
+  } catch (err) {
+    if (String(err?.message).includes("Unauthorized"))
+      return res.status(401).json({ error: "Unauthorized" });
+    return res.status(500).json({ error: String(err?.message ?? err) });
+  }
+});
+
+// Upload file to session (max 3 files)
+app.post("/ai/sessions/:id/upload", upload.single("file"), async (req, res) => {
+  try {
+    const user = await requireUser(req);
+    const sessionId = req.params.id;
     const file = req.file;
     
     if (!file) {
       return res.status(400).json({ error: "No file uploaded" });
     }
 
-    let content = "";
-    let fileType = "text"; // text, image, audio
-    let base64Data = null;
-    
-    // Handle Image files (PNG, JPG, JPEG, GIF, WEBP)
-    if (file.mimetype.startsWith("image/")) {
-      try {
-        console.log(`Processing image: ${file.originalname}, mimetype: ${file.mimetype}, size: ${file.buffer.length} bytes`);
-        
-        fileType = "image";
-        
-        // Resize image if too large (max 2048px width/height)
-        let processedBuffer = file.buffer;
-        const MAX_DIMENSION = 2048;
-        
-        const metadata = await sharp(file.buffer).metadata();
-        console.log(`Image dimensions: ${metadata.width}x${metadata.height}`);
-        
-        if (metadata.width > MAX_DIMENSION || metadata.height > MAX_DIMENSION) {
-          console.log(`Resizing image to fit within ${MAX_DIMENSION}x${MAX_DIMENSION}...`);
-          processedBuffer = await sharp(file.buffer)
-            .resize(MAX_DIMENSION, MAX_DIMENSION, {
-              fit: 'inside',
-              withoutEnlargement: true
-            })
-            .jpeg({ quality: 85 })
-            .toBuffer();
-          console.log(`Resized image size: ${processedBuffer.length} bytes`);
+    const session = await kvGet(`ai-session:${user.id}:${sessionId}`);
+    if (!session) {
+      return res.status(404).json({ error: "Session not found" });
+    }
+
+    // Check file limit
+    if (session.files.length >= 3) {
+      return res.status(400).json({ error: "Maximum 3 files per session" });
+    }
+
+    try {
+      const { content, fileType, base64Data } = await processFileContent(file);
+      
+      const fileId = crypto.randomUUID();
+      const fileData = {
+        id: fileId,
+        fileName: file.originalname,
+        fileType: fileType,
+        content: content,
+        uploadedAt: new Date().toISOString(),
+      };
+
+      if (base64Data && fileType === "image") {
+        fileData.base64Data = base64Data;
+        fileData.mimeType = file.mimetype;
+      }
+
+      session.files.push(fileData);
+      session.updatedAt = new Date().toISOString();
+      
+      await kvSet(`ai-session:${user.id}:${sessionId}`, session);
+
+      return res.json({ 
+        success: true, 
+        file: {
+          id: fileId,
+          fileName: file.originalname,
+          fileType: fileType,
+          preview: content.substring(0, 200)
+        },
+        session: {
+          id: session.id,
+          fileCount: session.files.length
         }
-        
-        // Convert image to base64 for storage and Vision API
-        base64Data = processedBuffer.toString("base64");
-        
-        console.log("Calling OpenAI Vision API...");
-        
-        // Use OpenAI Vision API to analyze the image
-        const response = await openai.chat.completions.create({
-          model: "gpt-4o-mini",
-          messages: [
-            {
-              role: "user",
-              content: [
-                {
-                  type: "text",
-                  text: "Please analyze this image and extract all text, diagrams, charts, and educational content. Describe everything in detail as if creating study notes from this image. Provide all responses in English only."
-                },
-                {
-                  type: "image_url",
-                  image_url: {
-                    url: `data:image/jpeg;base64,${base64Data}`,
-                    detail: "high"
-                  }
-                }
-              ]
-            }
-          ],
-          max_tokens: 2000
-        });
-        
-        content = response.choices[0].message.content;
-        console.log("Image analysis completed successfully");
-      } catch (err) {
-        console.error("Image processing error:", err);
-        console.error("Error details:", err.message);
-        return res.status(400).json({ 
-          error: `Failed to process image: ${err.message}`,
-          details: err.response?.data || err.toString()
-        });
-      }
-    }
-    // Handle Audio files (MP3, WAV, M4A, WEBM, MP4)
-    else if (file.mimetype.startsWith("audio/") || file.mimetype === "video/mp4" || file.mimetype === "video/webm") {
-      try {
-        fileType = "audio";
-        
-        // Use OpenAI Whisper API to transcribe audio
-        const transcription = await openai.audio.transcriptions.create({
-          file: new File([file.buffer], file.originalname, { type: file.mimetype }),
-          model: "whisper-1",
-        });
-        
-        content = transcription.text;
-      } catch (err) {
-        console.error("Audio transcription error:", err);
-        return res.status(400).json({ error: "Failed to transcribe audio. Make sure the file is a valid audio format." });
-      }
-    }
-    // Parse PDF files
-    else if (file.mimetype === "application/pdf" || file.originalname.endsWith(".pdf")) {
-      try {
-        const pdfData = await pdfParse(file.buffer);
-        content = pdfData.text;
-      } catch (err) {
-        console.error("PDF parse error:", err);
-        return res.status(400).json({ error: "Failed to parse PDF" });
-      }
-    } 
-    // Handle text files
-    else if (file.mimetype === "text/plain" || file.originalname.endsWith(".txt")) {
-      content = file.buffer.toString("utf-8");
-    }
-    // Handle markdown files
-    else if (file.originalname.endsWith(".md")) {
-      content = file.buffer.toString("utf-8");
-    }
-    // Try to handle other document types as plain text
-    else if (
-      file.mimetype.includes("text") || 
-      file.originalname.endsWith(".doc") ||
-      file.originalname.endsWith(".docx")
-    ) {
-      try {
-        content = file.buffer.toString("utf-8");
-      } catch (err) {
-        return res.status(400).json({ 
-          error: "Unable to read this file type. Please use .txt or .pdf files." 
-        });
-      }
-    }
-    else {
-      return res.status(400).json({ 
-        error: "Unsupported file type. Please upload text, PDF, image, or audio files." 
       });
+    } catch (err) {
+      console.error("File processing error:", err);
+      return res.status(400).json({ error: err.message });
     }
-
-    if (!content || content.trim().length === 0) {
-      return res.status(400).json({ error: "File is empty or unreadable" });
-    }
-
-    // Store the uploaded content for this user
-    const materialId = crypto.randomUUID();
-    const materialData = {
-      id: materialId,
-      userId: user.id,
-      fileName: file.originalname,
-      fileType: fileType,
-      content: content,
-      uploadedAt: new Date().toISOString(),
-    };
-    
-    // Store base64 data for images if needed later
-    if (base64Data && fileType === "image") {
-      materialData.base64Data = base64Data;
-      materialData.mimeType = file.mimetype;
-    }
-    
-    await kvSet(`study-material:${user.id}:${materialId}`, materialData);
-
-    // Set as active material
-    await kvSet(`active-material:${user.id}`, materialId);
-
-    return res.json({ 
-      success: true, 
-      materialId,
-      fileName: file.originalname,
-      fileType: fileType,
-      preview: content.substring(0, 200) 
-    });
   } catch (err) {
     console.error("Upload error:", err);
+    if (String(err?.message).includes("Unauthorized"))
+      return res.status(401).json({ error: "Unauthorized" });
     return res.status(500).json({ error: String(err?.message ?? err) });
   }
 });
 
-// AI Study Assistant - Chat
+// Delete file from session
+app.delete("/ai/sessions/:sessionId/files/:fileId", async (req, res) => {
+  try {
+    const user = await requireUser(req);
+    const { sessionId, fileId } = req.params;
+    
+    const session = await kvGet(`ai-session:${user.id}:${sessionId}`);
+    if (!session) {
+      return res.status(404).json({ error: "Session not found" });
+    }
+
+    session.files = session.files.filter(f => f.id !== fileId);
+    session.updatedAt = new Date().toISOString();
+    
+    await kvSet(`ai-session:${user.id}:${sessionId}`, session);
+
+    return res.json({ success: true, fileCount: session.files.length });
+  } catch (err) {
+    if (String(err?.message).includes("Unauthorized"))
+      return res.status(401).json({ error: "Unauthorized" });
+    return res.status(500).json({ error: String(err?.message ?? err) });
+  }
+});
+
+// AI Study Assistant - Chat with session history
+app.post("/ai/sessions/:id/chat", async (req, res) => {
+  try {
+    const user = await requireUser(req);
+    const sessionId = req.params.id;
+    const { message, mode = "student" } = req.body ?? {};
+
+    if (!message) {
+      return res.status(400).json({ error: "No message provided" });
+    }
+
+    const session = await kvGet(`ai-session:${user.id}:${sessionId}`);
+    if (!session) {
+      return res.status(404).json({ error: "Session not found" });
+    }
+
+    // Build context from session files
+    let filesContext = "";
+    if (session.files && session.files.length > 0) {
+      filesContext = session.files
+        .map(f => `[File: ${f.fileName}]\n${f.content.substring(0, 2000)}`)
+        .join("\n\n");
+    }
+
+    let systemPrompt = "";
+    
+    if (mode === "student") {
+      if (filesContext) {
+        systemPrompt = `You are a helpful study assistant. Always respond in English only. The student has uploaded the following study materials:\n\n${filesContext}\n\nBased on these materials, help the student understand the concepts. Answer their questions clearly and provide explanations. If they ask questions outside the scope of the material, let them know and still try to help.`;
+      } else {
+        systemPrompt = "You are a helpful study assistant. Always respond in English only. The student hasn't uploaded any material yet, but you can still help them with general study questions. Encourage them to upload their study materials for more specific help.";
+      }
+    } else if (mode === "teach") {
+      systemPrompt = "You are a study assistant evaluating a student's explanation. Always respond in English only. Provide constructive feedback on their understanding. Point out what they explained well and what could be improved. Rate their understanding out of 10 and encourage them to keep learning.";
+    }
+
+    // Build messages array with chat history
+    const messages = [
+      { role: "system", content: systemPrompt }
+    ];
+
+    // Add previous chat history
+    if (session.chatHistory && session.chatHistory.length > 0) {
+      session.chatHistory.forEach(msg => {
+        messages.push({ role: msg.role, content: msg.content });
+      });
+    }
+
+    // Add current user message
+    messages.push({ role: "user", content: message });
+
+    // Call OpenAI API
+    const completion = await openai.chat.completions.create({
+      model: "gpt-4o-mini",
+      messages: messages,
+      temperature: 0.7,
+      max_tokens: 1000,
+    });
+
+    const aiResponse = completion.choices[0].message.content;
+
+    // Save to chat history
+    session.chatHistory.push({
+      role: "user",
+      content: message,
+      timestamp: new Date().toISOString()
+    });
+    session.chatHistory.push({
+      role: "assistant",
+      content: aiResponse,
+      timestamp: new Date().toISOString()
+    });
+    session.updatedAt = new Date().toISOString();
+
+    await kvSet(`ai-session:${user.id}:${sessionId}`, session);
+
+    return res.json({ 
+      success: true,
+      response: aiResponse,
+      messageCount: session.chatHistory.length
+    });
+  } catch (err) {
+    console.error("Chat error:", err);
+    if (String(err?.message).includes("Unauthorized"))
+      return res.status(401).json({ error: "Unauthorized" });
+    return res.status(500).json({ error: String(err?.message ?? err) });
+  }
+});
+
+// Legacy chat endpoint (for backward compatibility)
 app.post("/ai/chat", async (req, res) => {
   try {
     const user = await requireUser(req);
@@ -738,7 +999,127 @@ app.post("/ai/chat", async (req, res) => {
   }
 });
 
-// AI Study Assistant - Voice Chat
+// AI Study Assistant - Voice Chat with session
+app.post("/ai/sessions/:id/voice-chat", upload.single("audio"), async (req, res) => {
+  try {
+    const user = await requireUser(req);
+    const sessionId = req.params.id;
+    const audioFile = req.file;
+    const { mode = "student" } = req.body ?? {};
+
+    if (!audioFile) {
+      return res.status(400).json({ error: "No audio file provided" });
+    }
+
+    const session = await kvGet(`ai-session:${user.id}:${sessionId}`);
+    if (!session) {
+      return res.status(404).json({ error: "Session not found" });
+    }
+
+    console.log(`Processing voice chat: ${audioFile.originalname}, size: ${audioFile.buffer.length} bytes`);
+
+    // Step 1: Transcribe audio to text using Whisper
+    let userMessage = "";
+    try {
+      console.log("Transcribing audio with Whisper...");
+      const transcription = await openai.audio.transcriptions.create({
+        file: new File([audioFile.buffer], audioFile.originalname || "audio.webm", { 
+          type: audioFile.mimetype 
+        }),
+        model: "whisper-1",
+      });
+      userMessage = transcription.text;
+      console.log("Transcription:", userMessage);
+    } catch (err) {
+      console.error("Transcription error:", err);
+      return res.status(400).json({ error: "Failed to transcribe audio" });
+    }
+
+    // Step 2: Build context from session files
+    let filesContext = "";
+    if (session.files && session.files.length > 0) {
+      filesContext = session.files
+        .map(f => `[File: ${f.fileName}]\n${f.content.substring(0, 2000)}`)
+        .join("\n\n");
+    }
+
+    let systemPrompt = "";
+    
+    if (mode === "student") {
+      if (filesContext) {
+        systemPrompt = `You are a helpful study assistant. Always respond in English only. The student has uploaded the following study materials:\n\n${filesContext}\n\nBased on these materials, help the student understand the concepts. Answer their questions clearly and provide explanations.`;
+      } else {
+        systemPrompt = "You are a helpful study assistant. Always respond in English only. The student hasn't uploaded any material yet, but you can still help them with general study questions.";
+      }
+    } else if (mode === "teach") {
+      systemPrompt = "You are a study assistant evaluating a student's explanation. Always respond in English only. Provide constructive feedback on their understanding.";
+    }
+
+    // Build messages with history
+    const messages = [{ role: "system", content: systemPrompt }];
+    
+    if (session.chatHistory && session.chatHistory.length > 0) {
+      session.chatHistory.forEach(msg => {
+        messages.push({ role: msg.role, content: msg.content });
+      });
+    }
+    
+    messages.push({ role: "user", content: userMessage });
+
+    console.log("Getting AI response...");
+    const completion = await openai.chat.completions.create({
+      model: "gpt-4o-mini",
+      messages: messages,
+      temperature: 0.7,
+      max_tokens: 1000,
+    });
+
+    const aiResponseText = completion.choices[0].message.content;
+    console.log("AI Response:", aiResponseText.substring(0, 100) + "...");
+
+    // Step 3: Convert AI response to speech using TTS
+    console.log("Converting response to speech...");
+    const mp3Response = await openai.audio.speech.create({
+      model: "tts-1",
+      voice: "nova",
+      input: aiResponseText,
+    });
+
+    const audioBuffer = Buffer.from(await mp3Response.arrayBuffer());
+    console.log(`TTS audio generated: ${audioBuffer.length} bytes`);
+
+    // Save to chat history
+    session.chatHistory.push({
+      role: "user",
+      content: userMessage,
+      timestamp: new Date().toISOString()
+    });
+    session.chatHistory.push({
+      role: "assistant",
+      content: aiResponseText,
+      timestamp: new Date().toISOString()
+    });
+    session.updatedAt = new Date().toISOString();
+
+    await kvSet(`ai-session:${user.id}:${sessionId}`, session);
+
+    // Return both text and audio
+    return res.json({
+      success: true,
+      userMessage: userMessage,
+      aiResponse: aiResponseText,
+      audioBase64: audioBuffer.toString("base64"),
+      messageCount: session.chatHistory.length
+    });
+  } catch (err) {
+    console.error("Voice chat error:", err);
+    if (String(err?.message).includes("Unauthorized"))
+      return res.status(401).json({ error: "Unauthorized" });
+    return res.status(500).json({ error: String(err?.message ?? err) });
+  }
+});
+
+// Legacy voice chat endpoint (for backward compatibility)
 app.post("/ai/voice-chat", upload.single("audio"), async (req, res) => {
   try {
     const user = await requireUser(req);
