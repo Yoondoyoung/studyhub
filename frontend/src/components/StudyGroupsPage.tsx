@@ -6,13 +6,14 @@ import { Card, CardContent } from './ui/card';
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger } from './ui/dialog';
 import { Badge } from './ui/badge';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from './ui/select';
-import { MapPin, Calendar, Users, Plus, CheckCircle2, XCircle, Clock, Heart, Trash2, Video } from 'lucide-react';
+import { MapPin, Calendar, Users, Plus, CheckCircle2, XCircle, Clock, Heart, Trash2, Video, Pencil } from 'lucide-react';
 import { toast } from 'sonner';
 import { apiBase } from '../utils/api';
 
 interface StudyGroup {
   id: string;
   hostId: string;
+  hostUsername?: string;
   location: string;
   date: string;
   time: string;
@@ -27,6 +28,7 @@ interface StudyGroup {
 interface StudyGroupsPageProps {
   accessToken: string;
   userId: string;
+  currentUserUsername?: string;
   onJoinRoom: (groupId: string) => void;
 }
 
@@ -63,19 +65,23 @@ const getSubjectIcon = (topic: string) => {
   return subject ? subjectIcons[subject] : subjectIcons.default;
 };
 
-export function StudyGroupsPage({ accessToken, userId, onJoinRoom }: StudyGroupsPageProps) {
+const defaultGroupForm = {
+  location: '',
+  date: '',
+  time: '',
+  topic: '',
+  maxParticipants: 10,
+  studyType: 'In-person',
+  duration: '2 hours'
+};
+
+export function StudyGroupsPage({ accessToken, userId, currentUserUsername, onJoinRoom }: StudyGroupsPageProps) {
   const [groups, setGroups] = useState<StudyGroup[]>([]);
   const [isCreateDialogOpen, setIsCreateDialogOpen] = useState(false);
+  const [editingGroup, setEditingGroup] = useState<StudyGroup | null>(null);
+  const [editForm, setEditForm] = useState(defaultGroupForm);
   const [favorites, setFavorites] = useState<Set<string>>(new Set());
-  const [newGroup, setNewGroup] = useState({
-    location: '',
-    date: '',
-    time: '',
-    topic: '',
-    maxParticipants: 10,
-    studyType: 'In-person',
-    duration: '2 hours'
-  });
+  const [newGroup, setNewGroup] = useState(defaultGroupForm);
 
   useEffect(() => {
     fetchGroups();
@@ -91,6 +97,7 @@ export function StudyGroupsPage({ accessToken, userId, onJoinRoom }: StudyGroups
         {
           id: 'sample-1',
           hostId: 'other-user-1',
+          hostUsername: 'Olivia',
           location: 'Main Library, 3rd Floor',
           date: '2026-02-15',
           time: '14:00',
@@ -104,6 +111,7 @@ export function StudyGroupsPage({ accessToken, userId, onJoinRoom }: StudyGroups
         {
           id: 'sample-2',
           hostId: 'other-user-2',
+          hostUsername: 'Alex',
           location: 'Online (Zoom)',
           date: '2026-02-12',
           time: '18:30',
@@ -136,14 +144,64 @@ export function StudyGroupsPage({ accessToken, userId, onJoinRoom }: StudyGroups
       const data = await response.json();
       
       if (data.group) {
-        setGroups([...groups, data.group]);
-        setNewGroup({ location: '', date: '', time: '', topic: '', maxParticipants: 10, studyType: 'In-person', duration: '2 hours' });
+        setGroups([...groups, { ...data.group, hostUsername: currentUserUsername ?? data.group.hostUsername }]);
+        setNewGroup(defaultGroupForm);
         setIsCreateDialogOpen(false);
         toast.success('🎉 Study group created!');
       }
     } catch (error) {
       console.error('Failed to create group:', error);
       toast.error('Failed to create study group');
+    }
+  };
+
+  const openEditDialog = (group: StudyGroup) => {
+    setEditingGroup(group);
+    setEditForm({
+      location: group.location ?? '',
+      date: group.date ?? '',
+      time: group.time ?? '',
+      topic: group.topic ?? '',
+      maxParticipants: group.maxParticipants ?? 10,
+      studyType: (group as StudyGroup & { studyType?: string }).studyType ?? 'In-person',
+      duration: (group as StudyGroup & { duration?: string }).duration ?? '2 hours'
+    });
+  };
+
+  const handleUpdateGroup = async () => {
+    if (!editingGroup) return;
+    try {
+      const response = await fetch(`${apiBase}/study-groups/${editingGroup.id}`, {
+        method: 'PUT',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${accessToken}`
+        },
+        body: JSON.stringify({
+          location: editForm.location,
+          date: editForm.date,
+          time: editForm.time,
+          topic: editForm.topic,
+          maxParticipants: editForm.maxParticipants,
+          studyType: editForm.studyType,
+          duration: editForm.duration
+        })
+      });
+      const data = await response.json();
+      if (data.group) {
+        setGroups(groups.map((g) =>
+          g.id === editingGroup.id
+            ? { ...data.group, hostUsername: data.group.hostUsername ?? g.hostUsername ?? currentUserUsername }
+            : g
+        ));
+        setEditingGroup(null);
+        toast.success('Room updated!');
+      } else {
+        toast.error(data.error || 'Failed to update');
+      }
+    } catch (error) {
+      console.error('Failed to update group:', error);
+      toast.error('Failed to update room');
     }
   };
 
@@ -348,6 +406,107 @@ export function StudyGroupsPage({ accessToken, userId, onJoinRoom }: StudyGroups
             </div>
           </DialogContent>
         </Dialog>
+
+        {/* Edit room dialog */}
+        <Dialog open={!!editingGroup} onOpenChange={(open) => !open && setEditingGroup(null)}>
+          <DialogContent className="bg-gradient-to-br from-white to-purple-50">
+            <DialogHeader>
+              <DialogTitle className="text-2xl">Edit Room</DialogTitle>
+            </DialogHeader>
+            <div className="space-y-4">
+              <div className="space-y-2">
+                <Label>Topic / Subject</Label>
+                <Input
+                  placeholder="Calculus Study Session"
+                  value={editForm.topic}
+                  onChange={(e) => setEditForm({ ...editForm, topic: e.target.value })}
+                  className="border-purple-200"
+                />
+              </div>
+              <div className="space-y-2">
+                <Label>Location</Label>
+                <Input
+                  placeholder="Main Library, 3rd Floor"
+                  value={editForm.location}
+                  onChange={(e) => setEditForm({ ...editForm, location: e.target.value })}
+                  className="border-purple-200"
+                />
+              </div>
+              <div className="grid grid-cols-2 gap-4">
+                <div className="space-y-2">
+                  <Label>Date</Label>
+                  <Input
+                    type="date"
+                    value={editForm.date}
+                    onChange={(e) => setEditForm({ ...editForm, date: e.target.value })}
+                    className="border-purple-200"
+                  />
+                </div>
+                <div className="space-y-2">
+                  <Label>Time</Label>
+                  <Input
+                    type="time"
+                    value={editForm.time}
+                    onChange={(e) => setEditForm({ ...editForm, time: e.target.value })}
+                    className="border-purple-200"
+                  />
+                </div>
+              </div>
+              <div className="grid grid-cols-2 gap-4">
+                <div className="space-y-2">
+                  <Label>Study Type</Label>
+                  <Select
+                    value={editForm.studyType}
+                    onValueChange={(value) => setEditForm({ ...editForm, studyType: value })}
+                  >
+                    <SelectTrigger>
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="In-person">In-person</SelectItem>
+                      <SelectItem value="Online">Online</SelectItem>
+                      <SelectItem value="Hybrid">Hybrid</SelectItem>
+                    </SelectContent>
+                  </Select>
+                </div>
+                <div className="space-y-2">
+                  <Label>Duration</Label>
+                  <Select
+                    value={editForm.duration}
+                    onValueChange={(value) => setEditForm({ ...editForm, duration: value })}
+                  >
+                    <SelectTrigger>
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="1 hour">1 hour</SelectItem>
+                      <SelectItem value="2 hours">2 hours</SelectItem>
+                      <SelectItem value="3 hours">3 hours</SelectItem>
+                      <SelectItem value="4+ hours">4+ hours</SelectItem>
+                    </SelectContent>
+                  </Select>
+                </div>
+              </div>
+              <div className="space-y-2">
+                <Label>Max Participants</Label>
+                <Input
+                  type="number"
+                  min="2"
+                  max="50"
+                  value={editForm.maxParticipants}
+                  onChange={(e) => setEditForm({ ...editForm, maxParticipants: parseInt(e.target.value) || 10 })}
+                  className="border-purple-200"
+                />
+              </div>
+              <Button 
+                onClick={handleUpdateGroup} 
+                className="w-full bg-gradient-to-r from-purple-500 to-pink-500 hover:from-purple-600 hover:to-pink-600"
+              >
+                Save changes
+              </Button>
+            </div>
+          </DialogContent>
+        </Dialog>
       </div>
 
       <div className="grid gap-6 md:grid-cols-2 lg:grid-cols-3">
@@ -380,6 +539,9 @@ export function StudyGroupsPage({ accessToken, userId, onJoinRoom }: StudyGroups
                         <div className="text-4xl">{icon}</div>
                         <div className="flex-1">
                           <h3 className="font-bold text-xl text-gray-900">{group.topic}</h3>
+                          <p className="text-xs text-gray-600 mt-0.5">
+                            Host: {group.hostUsername ?? group.hostId?.slice(0, 8) ?? '—'}
+                          </p>
                           {isHost && (
                             <Badge className="mt-1 bg-gradient-to-r from-purple-500 to-pink-500 text-white border-0">
                               Your Room
@@ -489,15 +651,26 @@ export function StudyGroupsPage({ accessToken, userId, onJoinRoom }: StudyGroups
                   )}
 
                   {isHost && (
-                    <Button
-                      variant="outline"
-                      size="sm"
-                      className="w-full border-red-200 text-red-600 hover:bg-red-50 hover:text-red-700"
-                      onClick={() => handleDeleteGroup(group.id)}
-                    >
-                      <Trash2 className="size-4 mr-2" />
-                      Delete room
-                    </Button>
+                    <div className="flex gap-2">
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        className="flex-1 border-purple-200 text-purple-600 hover:bg-purple-50"
+                        onClick={() => openEditDialog(group)}
+                      >
+                        <Pencil className="size-4 mr-2" />
+                        Edit
+                      </Button>
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        className="flex-1 border-red-200 text-red-600 hover:bg-red-50 hover:text-red-700"
+                        onClick={() => handleDeleteGroup(group.id)}
+                      >
+                        <Trash2 className="size-4 mr-2" />
+                        Delete
+                      </Button>
+                    </div>
                   )}
                 </CardContent>
               </Card>

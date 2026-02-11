@@ -297,6 +297,7 @@ export default function App() {
             <StudyGroupsPage
               accessToken={accessToken}
               userId={user?.id || ''}
+              currentUserUsername={user?.username}
               onJoinRoom={navigateToRoom}
             />
           )}
