@@ -6,7 +6,7 @@ import { Card, CardContent } from './ui/card';
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger } from './ui/dialog';
 import { Badge } from './ui/badge';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from './ui/select';
-import { MapPin, Calendar, Users, Plus, CheckCircle2, XCircle, Clock, Heart } from 'lucide-react';
+import { MapPin, Calendar, Users, Plus, CheckCircle2, XCircle, Clock, Heart, Trash2 } from 'lucide-react';
 import { toast } from 'sonner';
 import { apiBase } from '../utils/api';
 
@@ -187,6 +187,26 @@ export function StudyGroupsPage({ accessToken, userId }: StudyGroupsPageProps) {
       }
     } catch (error) {
       console.error('Failed to manage applicant:', error);
+    }
+  };
+
+  const handleDeleteGroup = async (groupId: string) => {
+    if (!confirm('Delete this study room? This cannot be undone.')) return;
+    try {
+      const response = await fetch(`${apiBase}/study-groups/${groupId}`, {
+        method: 'DELETE',
+        headers: { Authorization: `Bearer ${accessToken}` }
+      });
+      const data = await response.json();
+      if (data.success) {
+        setGroups(groups.filter((g) => g.id !== groupId));
+        toast.success('Room deleted');
+      } else {
+        toast.error(data.error || 'Failed to delete');
+      }
+    } catch (error) {
+      console.error('Failed to delete group:', error);
+      toast.error('Failed to delete room');
     }
   };
 
@@ -452,6 +472,18 @@ export function StudyGroupsPage({ accessToken, userId }: StudyGroupsPageProps) {
                   {isMember && !isHost && (
                     <Button className="w-full bg-green-600 text-white hover:bg-green-700 font-semibold" disabled>
                       ✓ Joined
+                    </Button>
+                  )}
+
+                  {isHost && (
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      className="w-full border-red-200 text-red-600 hover:bg-red-50 hover:text-red-700"
+                      onClick={() => handleDeleteGroup(group.id)}
+                    >
+                      <Trash2 className="size-4 mr-2" />
+                      Delete room
                     </Button>
                   )}
                 </CardContent>
