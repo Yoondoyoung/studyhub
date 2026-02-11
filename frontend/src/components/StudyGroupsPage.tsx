@@ -624,9 +624,10 @@ export function StudyGroupsPage({ accessToken, userId, currentUserUsername, onJo
                   )}
 
                   {/* Action button */}
-                  {isMeetingStarted && (isHost || isMember) && (
+                  {isMeetingStarted && (isHost || isMember || !isFull) && (
                     <Button
                       className="w-full bg-teal-600 text-white hover:bg-teal-700 font-semibold"
+                      disabled={isFull}
                       onClick={() => onJoinRoom(group.id)}
                     >
                       <Video className="size-4 mr-2" />
