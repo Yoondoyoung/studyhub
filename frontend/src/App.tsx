@@ -303,6 +303,7 @@ export default function App() {
           {currentPage === 'room' && currentGroupId && (
             <StudyRoomPage
               groupId={currentGroupId}
+              accessToken={accessToken}
               onBack={() => navigateTo('study-groups')}
             />
           )}
