@@ -12,6 +12,7 @@ import {
   AlertDialogTitle,
 } from './ui/alert-dialog';
 import { DoorOpen, MapPin, Calendar, Clock, Users } from 'lucide-react';
+import { toast } from 'sonner';
 import { apiBase } from '../utils/api';
 
 interface Participant {
@@ -72,6 +73,7 @@ export function StudyRoomPage({
   const chatScrollRef = useRef<HTMLDivElement | null>(null);
   const chatAutoScrollRef = useRef(true);
   const socketRef = useRef<WebSocket | null>(null);
+  const [joinBlocked, setJoinBlocked] = useState(false);
 
   // Fetch room details
   useEffect(() => {
@@ -82,7 +84,12 @@ export function StudyRoomPage({
           headers: auth(accessToken),
         });
         const data = await res.json();
-        if (!cancelled && data.group) setGroup(data.group);
+        if (!cancelled && data.group) {
+          setGroup(data.group);
+          if (!data.group.participants?.includes(currentUserId)) {
+            setJoinBlocked(true);
+          }
+        }
       } catch (e) {
         if (!cancelled) console.error('Failed to fetch room', e);
       } finally {
@@ -97,20 +104,29 @@ export function StudyRoomPage({
     let cancelled = false;
     (async () => {
       try {
+        if (joinBlocked) return;
         const res = await fetch(`${apiBase}/study-groups/${groupId}/presence`, {
           method: 'POST',
           headers: { ...auth(accessToken), 'Content-Type': 'application/json' },
         });
+        if (!res.ok) {
+          if (!cancelled && res.status === 403) {
+            setJoinBlocked(true);
+            toast.error('You need to be accepted to join this room.');
+          }
+          return;
+        }
         if (res.ok && !cancelled) joinedRef.current = true;
       } catch (e) {
         if (!cancelled) console.error('Failed to join presence', e);
       }
     })();
     return () => { cancelled = true; };
-  }, [groupId, accessToken]);
+  }, [groupId, accessToken, joinBlocked]);
 
   // Fetch room chat history
   useEffect(() => {
+    if (joinBlocked) return;
     let cancelled = false;
     (async () => {
       try {
@@ -124,10 +140,11 @@ export function StudyRoomPage({
       }
     })();
     return () => { cancelled = true; };
-  }, [groupId, accessToken]);
+  }, [groupId, accessToken, joinBlocked]);
 
   // WebSocket: join room + receive messages
   useEffect(() => {
+    if (joinBlocked) return;
     const socket = new WebSocket(buildWsUrl(accessToken));
     socketRef.current = socket;
     setSocketReady(false);
@@ -144,6 +161,10 @@ export function StudyRoomPage({
     socket.onmessage = (event) => {
       try {
         const payload = JSON.parse(event.data);
+        if (payload?.type === 'room:error') {
+          toast.error(payload.message || 'Unable to join room');
+          return;
+        }
         if (payload?.type !== 'room:message' || !payload?.message) return;
         const message = payload.message as RoomMessage;
         if (message.roomId !== groupId) return;
@@ -170,7 +191,7 @@ export function StudyRoomPage({
       socket.close();
       socketRef.current = null;
     };
-  }, [groupId, accessToken]);
+  }, [groupId, accessToken, joinBlocked]);
 
   useEffect(() => {
     const container = chatScrollRef.current;
@@ -182,6 +203,7 @@ export function StudyRoomPage({
 
   // Poll presence list
   useEffect(() => {
+    if (joinBlocked) return;
     const fetchPresence = async () => {
       try {
         const res = await fetch(`${apiBase}/study-groups/${groupId}/presence`, {
@@ -196,7 +218,7 @@ export function StudyRoomPage({
     fetchPresence();
     const interval = setInterval(fetchPresence, 2000);
     return () => clearInterval(interval);
-  }, [groupId, accessToken]);
+  }, [groupId, accessToken, joinBlocked]);
 
   const handleLeaveRoom = async () => {
     setLeaveDialogOpen(false);
@@ -255,6 +277,23 @@ export function StudyRoomPage({
           Leave room
         </Button>
         <p className="text-muted-foreground">Room not found.</p>
+      </div>
+    );
+  }
+
+  if (joinBlocked) {
+    return (
+      <div className="space-y-4">
+        <Button variant="ghost" size="sm" onClick={onBack} className="gap-2">
+          <DoorOpen className="size-4" />
+          Back
+        </Button>
+        <div className="rounded-lg border bg-white p-6">
+          <h2 className="text-lg font-semibold text-gray-900">Awaiting acceptance</h2>
+          <p className="text-sm text-muted-foreground mt-2">
+            You need to be accepted by the host before you can join this room.
+          </p>
+        </div>
       </div>
     );
   }
