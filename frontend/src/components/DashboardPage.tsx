@@ -365,25 +365,31 @@ export function DashboardPage({ accessToken, userName }: DashboardPageProps) {
   };
 
   const stopTimer = async (todo: Todo) => {
-    if (activeTimer === todo.id) {
-      try {
-        const raw = localStorage.getItem(TIMER_STORAGE_KEY);
-        const stored = raw ? JSON.parse(raw) : null;
-        const elapsedSeconds =
-          stored && stored.todoId === todo.id
-            ? stored.baseSeconds + Math.floor((Date.now() - stored.startTime) / 1000)
-            : timerSeconds;
+    if (activeTimer !== todo.id) return;
 
-        await fetch(`${apiBase}/study-time`, {
+    const raw = localStorage.getItem(TIMER_STORAGE_KEY);
+    const stored = raw ? JSON.parse(raw) : null;
+    const elapsedSeconds =
+      stored && stored.todoId === todo.id
+        ? stored.baseSeconds + Math.floor((Date.now() - stored.startTime) / 1000)
+        : timerSeconds;
+
+    // Stop immediately in UI; persist in background
+    localStorage.removeItem(TIMER_STORAGE_KEY);
+    setActiveTimer(null);
+    setTimerSeconds(0);
+
+    try {
+      await Promise.all([
+        fetch(`${apiBase}/study-time`, {
           method: 'POST',
           headers: {
             'Content-Type': 'application/json',
             Authorization: `Bearer ${accessToken}`
           },
           body: JSON.stringify({ duration: elapsedSeconds })
-        });
-        
-        await fetch(`${apiBase}/todos/${todo.id}`, {
+        }),
+        fetch(`${apiBase}/todos/${todo.id}`, {
           method: 'PUT',
           headers: {
             'Content-Type': 'application/json',
@@ -395,19 +401,15 @@ export function DashboardPage({ accessToken, userName }: DashboardPageProps) {
             plannedDuration: todo.plannedDuration ?? todo.duration ?? 0,
             actualDuration: (todo.actualDuration || 0) + elapsedSeconds
           })
-        });
-        
-        setDailyTotal(prev => prev + elapsedSeconds);
-        fetchTodos();
-        fetchWeeklyMonthlyStudyTime();
-        toast.success(`🎯 Logged ${Math.floor(elapsedSeconds / 60)} minutes!`);
-      } catch (error) {
-        console.error('Failed to save study time:', error);
-      }
-      
-      localStorage.removeItem(TIMER_STORAGE_KEY);
-      setActiveTimer(null);
-      setTimerSeconds(0);
+        })
+      ]);
+
+      setDailyTotal(prev => prev + elapsedSeconds);
+      fetchTodos();
+      fetchWeeklyMonthlyStudyTime();
+      toast.success(`🎯 Logged ${Math.floor(elapsedSeconds / 60)} minutes!`);
+    } catch (error) {
+      console.error('Failed to save study time:', error);
     }
   };
 
@@ -738,17 +740,46 @@ export function DashboardPage({ accessToken, userName }: DashboardPageProps) {
                       ? 'bg-amber-100 text-amber-700'
                       : 'bg-rose-100 text-rose-700';
 
+                  const isPlaceholder = String(todo.id).startsWith('placeholder-');
+                  const isActive = !isPlaceholder && activeTimer === todo.id;
+
                   return (
                     <div
                       key={todo.id}
-                      className="bg-white rounded-2xl p-4 shadow-sm border border-white/70 flex flex-col justify-between min-h-[160px]"
+                      role={isPlaceholder ? undefined : "button"}
+                      tabIndex={isPlaceholder ? undefined : 0}
+                      onClick={() => {
+                        if (isPlaceholder) return;
+                        if (isActive) {
+                          stopTimer(todo as Todo);
+                        } else {
+                          startTimer(todo.id);
+                        }
+                      }}
+                      onKeyDown={(event) => {
+                        if (isPlaceholder) return;
+                        if (event.key === 'Enter' || event.key === ' ') {
+                          event.preventDefault();
+                          if (isActive) {
+                            stopTimer(todo as Todo);
+                          } else {
+                            startTimer(todo.id);
+                          }
+                        }
+                      }}
+                      className={`bg-white rounded-2xl p-4 shadow-sm border border-white/70 flex flex-col justify-between min-h-[160px] ${
+                        isPlaceholder ? '' : 'cursor-pointer hover:shadow-md'
+                      } ${isActive ? 'ring-2 ring-emerald-300' : ''}`}
                     >
                       <div className="flex items-start justify-between">
                         <div className="size-10 rounded-full bg-gray-100" />
-                        {'id' in todo && !String(todo.id).startsWith('placeholder-') ? (
+                        {!isPlaceholder ? (
                           <button
                             className="text-sm text-gray-400 hover:text-gray-600"
-                            onClick={() => openEditDialog(todo as Todo)}
+                            onClick={(event) => {
+                              event.stopPropagation();
+                              openEditDialog(todo as Todo);
+                            }}
                             type="button"
                           >
                             •••
@@ -932,7 +963,8 @@ export function DashboardPage({ accessToken, userName }: DashboardPageProps) {
           </div>
 
         <div className="xl:col-span-4">
-          <div className="rounded-[36px] bg-white/60 shadow-[0_30px_80px_rgba(15,23,42,0.08)] p-6 space-y-6 h-full flex flex-col">
+          <div className="rounded-[36px] bg-white/60 shadow-[0_30px_80px_rgba(15,23,42,0.08)] p-6 space-y-6 h-[720px] flex flex-col overflow-hidden">
+            <div className="space-y-6 overflow-y-auto pr-1">
             <div className="bg-white/90 rounded-3xl shadow-[0_20px_60px_rgba(15,23,42,0.08)] p-5">
               <h3 className="text-base font-semibold text-gray-900 mb-4">Nearby Study Rooms</h3>
               <div className="space-y-3">
@@ -993,22 +1025,23 @@ export function DashboardPage({ accessToken, userName }: DashboardPageProps) {
               </div>
             </div>
 
-            <div className="bg-white/90 rounded-3xl shadow-[0_20px_60px_rgba(15,23,42,0.08)] p-5">
+            <div className="bg-white/90 rounded-3xl shadow-[0_20px_60px_rgba(15,23,42,0.08)] p-4">
               <h3 className="text-base font-semibold text-gray-900 mb-4">Study Streak</h3>
               <div className="flex items-center justify-between">
                 {studyStreak.map((day, index) => (
                   <div key={index} className="flex flex-col items-center gap-2">
-                    <span className="text-xs text-gray-500 font-medium">{day.day}</span>
+                    <span className="text-[10px] text-gray-500 font-medium">{day.day}</span>
                     <div
-                      className={`size-8 rounded-full flex items-center justify-center ${
+                      className={`size-6 rounded-full flex items-center justify-center ${
                         day.completed ? 'bg-emerald-200 text-emerald-700' : 'bg-gray-100'
                       }`}
                     >
-                      {day.completed && <CheckCircle2 className="size-4" />}
+                      {day.completed && <CheckCircle2 className="size-3" />}
                     </div>
                   </div>
                 ))}
               </div>
+            </div>
             </div>
           </div>
         </div>

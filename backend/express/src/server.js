@@ -763,6 +763,23 @@ app.get("/ai/sessions", async (req, res) => {
 
 // Get specific session details
 app.get("/ai/sessions/:id", async (req, res) => {
+  try {
+    const user = await requireUser(req);
+    const sessionId = req.params.id;
+    const session = await kvGet(`ai-session:${user.id}:${sessionId}`);
+
+    if (!session) {
+      return res.status(404).json({ error: "Session not found" });
+    }
+
+    return res.json({ session });
+  } catch (err) {
+    if (String(err?.message).includes("Unauthorized"))
+      return res.status(401).json({ error: "Unauthorized" });
+    return res.status(500).json({ error: String(err?.message ?? err) });
+  }
+});
+
 app.get("/friends/:id/todos", async (req, res) => {
   try {
     await requireUser(req);
