@@ -1,4 +1,11 @@
-import "dotenv/config";
+import path from "path";
+import { fileURLToPath } from "url";
+import dotenv from "dotenv";
+
+const __dirname = path.dirname(fileURLToPath(import.meta.url));
+dotenv.config({ path: path.resolve(__dirname, "..", ".env") });
+
+import crypto from "crypto";
 import express from "express";
 import cors from "cors";
 import { createClient } from "@supabase/supabase-js";
@@ -1586,6 +1593,101 @@ app.get("/users/search", async (req, res) => {
       )
       .slice(0, 10);
     return res.json({ users: results });
+  } catch (err) {
+    return res.status(500).json({ error: String(err?.message ?? err) });
+  }
+});
+
+// --- Zoom Meeting SDK (embed in our site) ---
+const ZOOM_SDK_KEY = process.env.ZOOM_SDK_KEY ?? "";
+const ZOOM_SDK_SECRET = process.env.ZOOM_SDK_SECRET ?? "";
+
+function base64UrlEncode(buf) {
+  return Buffer.from(buf)
+    .toString("base64")
+    .replace(/\+/g, "-")
+    .replace(/\//g, "_")
+    .replace(/=+$/, "");
+}
+
+function generateZoomMeetingSignature(meetingNumber, role, expirationSeconds = 7200) {
+  if (!ZOOM_SDK_KEY || !ZOOM_SDK_SECRET) {
+    throw new Error("Zoom SDK key or secret not configured");
+  }
+  const iat = Math.floor(Date.now() / 1000);
+  const exp = iat + Math.min(Math.max(Number(expirationSeconds) || 7200, 1800), 172800);
+  const payload = {
+    sdkKey: ZOOM_SDK_KEY,
+    mn: String(meetingNumber),
+    role: Number(role) === 1 ? 1 : 0,
+    iat,
+    exp,
+    tokenExp: exp,
+  };
+  const header = { alg: "HS256", typ: "JWT" };
+  const headerB64 = base64UrlEncode(JSON.stringify(header));
+  const payloadB64 = base64UrlEncode(JSON.stringify(payload));
+  const signInput = `${headerB64}.${payloadB64}`;
+  const sig = crypto.createHmac("sha256", ZOOM_SDK_SECRET).update(signInput).digest("base64")
+    .replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
+  return `${signInput}.${sig}`;
+}
+
+app.post("/api/zoom/sdk-jwt", async (req, res) => {
+  try {
+    const { meetingNumber, role = 0, expirationSeconds } = req.body ?? {};
+    const mn = String(meetingNumber ?? "").trim();
+    if (!mn) {
+      return res.status(400).json({ error: "meetingNumber is required" });
+    }
+    const signature = generateZoomMeetingSignature(mn, role, expirationSeconds);
+    return res.json({
+      signature,
+      sdkKey: ZOOM_SDK_KEY,
+      meetingNumber: mn,
+    });
+  } catch (err) {
+    return res.status(500).json({ error: String(err?.message ?? err) });
+  }
+});
+
+app.post("/api/meetings", async (req, res) => {
+  try {
+    const user = await requireUser(req);
+    const { zoomMeetingNumber, password = "", topic = "Meeting" } = req.body ?? {};
+    const mn = String(zoomMeetingNumber ?? "").trim();
+    if (!mn) {
+      return res.status(400).json({ error: "zoomMeetingNumber is required" });
+    }
+    const meetingId = crypto.randomUUID();
+    const joinUrl = `${req.protocol}://${req.get("host") || "localhost"}#meeting-${meetingId}`;
+    const meeting = {
+      meetingId,
+      provider: "zoom",
+      zoomMeetingNumber: mn,
+      password: String(password),
+      topic: String(topic),
+      hostUserId: user.id,
+      scheduledAt: new Date().toISOString(),
+      status: "scheduled",
+    };
+    await kvSet(`meeting:${meetingId}`, meeting);
+    return res.json({ meeting, joinUrl });
+  } catch (err) {
+    if (String(err?.message) === "Unauthorized") {
+      return res.status(401).json({ error: "Unauthorized" });
+    }
+    return res.status(500).json({ error: String(err?.message ?? err) });
+  }
+});
+
+app.get("/api/meetings/:id", async (req, res) => {
+  try {
+    const meeting = await kvGet(`meeting:${req.params.id}`);
+    if (!meeting) {
+      return res.status(404).json({ error: "Meeting not found" });
+    }
+    return res.json(meeting);
   } catch (err) {
     return res.status(500).json({ error: String(err?.message ?? err) });
   }

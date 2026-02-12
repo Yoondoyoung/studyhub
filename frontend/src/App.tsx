@@ -10,6 +10,7 @@ import { FriendDetailPage } from './components/FriendDetailPage';
 import { SettingsPage } from './components/SettingsPage';
 import { ProfilePage } from './components/ProfilePage';
 import { StudyRoomPage } from './components/StudyRoomPage';
+import { MeetingPage } from './components/MeetingPage';
 import { Toaster } from './components/ui/sonner';
 import { 
   LayoutDashboard, 
@@ -24,13 +25,14 @@ import {
 } from 'lucide-react';
 import { toast } from 'sonner';
 
-type Page = 'login' | 'register' | 'dashboard' | 'study-groups' | 'solo-study' | 'friends' | 'settings' | 'profile' | 'friend-detail' | 'room';
+type Page = 'login' | 'register' | 'dashboard' | 'study-groups' | 'solo-study' | 'friends' | 'settings' | 'profile' | 'friend-detail' | 'room' | 'meeting';
 
 const APP_PAGES: Page[] = ['dashboard', 'study-groups', 'solo-study', 'friends', 'settings'];
 
 function getPageFromHash(): Page {
   const hash = window.location.hash.slice(1);
   if (hash.startsWith('room-')) return 'room';
+  if (hash.startsWith('meeting-')) return 'meeting';
   if (APP_PAGES.includes(hash as Page)) return hash as Page;
   return 'dashboard';
 }
@@ -38,6 +40,12 @@ function getPageFromHash(): Page {
 function getGroupIdFromHash(): string | null {
   const hash = window.location.hash.slice(1);
   if (hash.startsWith('room-')) return hash.slice(5);
+  return null;
+}
+
+function getMeetingIdFromHash(): string | null {
+  const hash = window.location.hash.slice(1);
+  if (hash.startsWith('meeting-')) return hash.slice(8);
   return null;
 }
 
@@ -79,6 +87,7 @@ export default function App() {
   const [selectedSessionId, setSelectedSessionId] = useState<string | null>(null);
   const [deletingSessionId, setDeletingSessionId] = useState<string | null>(null);
   const [roomUserIsIn, setRoomUserIsIn] = useState<string | null>(null);
+  const [currentMeetingId, setCurrentMeetingId] = useState<string | null>(null);
 
   useEffect(() => {
     checkSession();
@@ -95,8 +104,10 @@ export default function App() {
     const syncHash = () => {
       const page = getPageFromHash();
       const gid = page === 'room' ? getGroupIdFromHash() : null;
+      const mid = page === 'meeting' ? getMeetingIdFromHash() : null;
       setCurrentPage(page);
       setCurrentGroupId(gid);
+      setCurrentMeetingId(mid);
       if (page === 'room' && gid) setRoomUserIsIn(gid);
     };
     syncHash();
@@ -105,10 +116,11 @@ export default function App() {
   }, [accessToken]);
 
   const navigateTo = (page: Page) => {
-    if (page === 'room') return;
+    if (page === 'room' || page === 'meeting') return;
     if (APP_PAGES.includes(page)) window.location.hash = page;
     setCurrentPage(page);
     setCurrentGroupId(null);
+    setCurrentMeetingId(null);
   };
 
   const navigateToRoom = (groupId: string) => {
@@ -502,6 +514,14 @@ export default function App() {
               accessToken={accessToken}
               onBack={() => navigateTo('study-groups')}
               onLeaveRoom={() => setRoomUserIsIn(null)}
+            />
+          )}
+          {currentPage === 'meeting' && currentMeetingId && (
+            <MeetingPage
+              meetingId={currentMeetingId}
+              accessToken={accessToken}
+              userName={user?.username || user?.email || 'Guest'}
+              onBack={() => navigateTo('dashboard')}
             />
           )}
           {currentPage === 'solo-study' && (
