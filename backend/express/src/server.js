@@ -1571,6 +1571,345 @@ app.delete("/ai/sessions/:id", async (req, res) => {
   }
 });
 
+// ============================================
+// Group Quiz APIs
+// ============================================
+
+// Upload file to group quiz (max = maxParticipants)
+app.post("/study-groups/:groupId/quiz/upload", upload.single("file"), async (req, res) => {
+  try {
+    const user = await requireUser(req);
+    const { groupId } = req.params;
+    const file = req.file;
+    
+    if (!file) {
+      return res.status(400).json({ error: "No file uploaded" });
+    }
+
+    // Get group info to check max participants
+    const group = await kvGet(`study-group:${groupId}`);
+    if (!group) {
+      return res.status(404).json({ error: "Group not found" });
+    }
+
+    // Get or create quiz data for this group
+    let quizSession = await kvGet(`group-quiz:${groupId}`);
+    if (!quizSession) {
+      quizSession = {
+        groupId,
+        files: [],
+        quiz: null,
+        answers: {}, // userId -> [answers]
+        createdAt: new Date().toISOString(),
+      };
+    }
+
+    // Check file limit
+    if (quizSession.files.length >= group.maxParticipants) {
+      return res.status(400).json({ error: `Maximum ${group.maxParticipants} files allowed` });
+    }
+
+    // Process file based on type
+    const fileId = crypto.randomUUID();
+    const fileName = file.originalname;
+    const fileType = file.mimetype;
+    let content = "";
+
+    try {
+      if (fileType === 'application/pdf') {
+        const pdfData = await pdfParse(file.buffer);
+        content = pdfData.text;
+      } else if (fileType.startsWith('image/')) {
+        const resizedBuffer = await sharp(file.buffer).resize(800).toBuffer();
+        const base64Image = resizedBuffer.toString('base64');
+        const imageUrl = `data:${fileType};base64,${base64Image}`;
+        
+        const visionResponse = await openai.chat.completions.create({
+          model: "gpt-4o-mini",
+          messages: [{
+            role: "user",
+            content: [
+              { type: "text", text: "Extract all text from this image. If there's no text, describe what you see." },
+              { type: "image_url", image_url: { url: imageUrl } }
+            ]
+          }],
+          max_tokens: 1000,
+        });
+        content = visionResponse.choices[0].message.content || "";
+      } else if (fileType.startsWith('audio/')) {
+        const audioTranscription = await openai.audio.transcriptions.create({
+          file: new File([file.buffer], fileName, { type: fileType }),
+          model: "whisper-1",
+        });
+        content = audioTranscription.text;
+      } else {
+        content = file.buffer.toString('utf-8');
+      }
+    } catch (err) {
+      console.error("File processing error:", err);
+      return res.status(500).json({ error: "Failed to process file" });
+    }
+
+    // Add file to quiz session
+    const fileData = {
+      id: fileId,
+      fileName,
+      fileType,
+      content,
+      uploadedBy: user.id,
+      uploadedAt: new Date().toISOString(),
+    };
+
+    quizSession.files.push(fileData);
+    quizSession.updatedAt = new Date().toISOString();
+    await kvSet(`group-quiz:${groupId}`, quizSession);
+
+    return res.json({
+      success: true,
+      file: { id: fileId, fileName, fileType },
+      fileCount: quizSession.files.length,
+      maxFiles: group.maxParticipants,
+    });
+  } catch (err) {
+    console.error("Group quiz upload error:", err);
+    if (String(err?.message).includes("Unauthorized"))
+      return res.status(401).json({ error: "Unauthorized" });
+    return res.status(500).json({ error: String(err?.message ?? err) });
+  }
+});
+
+// Get group quiz files
+app.get("/study-groups/:groupId/quiz/files", async (req, res) => {
+  try {
+    await requireUser(req);
+    const { groupId } = req.params;
+
+    const quizSession = await kvGet(`group-quiz:${groupId}`);
+    if (!quizSession) {
+      return res.json({ files: [] });
+    }
+
+    const filesWithoutContent = quizSession.files.map(f => ({
+      id: f.id,
+      fileName: f.fileName,
+      fileType: f.fileType,
+      uploadedAt: f.uploadedAt,
+    }));
+
+    return res.json({ files: filesWithoutContent });
+  } catch (err) {
+    if (String(err?.message).includes("Unauthorized"))
+      return res.status(401).json({ error: "Unauthorized" });
+    return res.status(500).json({ error: String(err?.message ?? err) });
+  }
+});
+
+// Generate group quiz
+app.post("/study-groups/:groupId/quiz/generate", async (req, res) => {
+  try {
+    await requireUser(req);
+    const { groupId } = req.params;
+    const { count = 10, difficulty = "medium" } = req.body || {};
+
+    const quizSession = await kvGet(`group-quiz:${groupId}`);
+    if (!quizSession || !quizSession.files || quizSession.files.length === 0) {
+      return res.status(400).json({ error: "No files uploaded for this quiz" });
+    }
+
+    // Build context from files
+    const filesContext = quizSession.files
+      .map(f => `[File: ${f.fileName}]\n${f.content.substring(0, 3000)}`)
+      .join("\n\n");
+
+    const difficultyInstructions = {
+      easy: "Make the questions straightforward and test basic understanding of key terms and main concepts. Use simple language.",
+      medium: "Make the questions moderately challenging, testing both understanding and application of concepts. Balance between recall and analysis.",
+      hard: "Make the questions challenging, requiring deep understanding, critical thinking, and ability to apply concepts in new contexts. Include complex scenarios."
+    };
+
+    const difficultyInstruction = difficultyInstructions[difficulty.toLowerCase()] || difficultyInstructions.medium;
+
+    const quizPrompt = `Based on the following study materials, generate exactly ${count} multiple-choice questions. Each question should test understanding of key concepts from the materials.
+
+Study Materials:
+${filesContext}
+
+Generate the questions in this EXACT JSON format (respond ONLY with valid JSON, no additional text):
+{
+  "questions": [
+    {
+      "id": 1,
+      "question": "Question text here?",
+      "options": ["Option A", "Option B", "Option C", "Option D"],
+      "correctAnswer": 0,
+      "explanation": "Brief explanation of why this is correct"
+    }
+  ]
+}
+
+Requirements:
+- Exactly ${count} questions
+- Each question has 4 options (A, B, C, D)
+- correctAnswer is the index (0, 1, 2, or 3)
+- Questions should cover different topics from the materials
+- Difficulty level: ${difficulty.toUpperCase()} - ${difficultyInstruction}
+- Always respond in English only`;
+
+    console.log("Generating group quiz questions...");
+    const completion = await openai.chat.completions.create({
+      model: "gpt-4o-mini",
+      messages: [
+        { role: "system", content: "You are a quiz generator. Always respond with valid JSON only, no additional text. Ensure all strings are properly escaped." },
+        { role: "user", content: quizPrompt }
+      ],
+      temperature: 0.8,
+      max_tokens: 2500,
+      response_format: { type: "json_object" }
+    });
+
+    let quizData;
+    try {
+      const responseText = completion.choices[0].message.content;
+      quizData = JSON.parse(responseText);
+    } catch (parseError) {
+      console.error("Failed to parse quiz JSON:", parseError);
+      return res.status(500).json({ error: "Failed to generate valid quiz format" });
+    }
+
+    // Save quiz to session
+    quizSession.quiz = quizData;
+    quizSession.quizSettings = { count, difficulty };
+    quizSession.answers = {}; // Reset answers
+    quizSession.updatedAt = new Date().toISOString();
+    await kvSet(`group-quiz:${groupId}`, quizSession);
+
+    console.log(`Generated ${quizData.questions?.length || 0} questions for group ${groupId}`);
+
+    return res.json({
+      success: true,
+      quiz: quizData
+    });
+  } catch (err) {
+    console.error("Group quiz generation error:", err);
+    if (String(err?.message).includes("Unauthorized"))
+      return res.status(401).json({ error: "Unauthorized" });
+    return res.status(500).json({ error: String(err?.message ?? err) });
+  }
+});
+
+// Get group quiz
+app.get("/study-groups/:groupId/quiz", async (req, res) => {
+  try {
+    await requireUser(req);
+    const { groupId } = req.params;
+
+    const quizSession = await kvGet(`group-quiz:${groupId}`);
+    if (!quizSession || !quizSession.quiz) {
+      return res.json({ quiz: null });
+    }
+
+    return res.json({ quiz: quizSession.quiz });
+  } catch (err) {
+    if (String(err?.message).includes("Unauthorized"))
+      return res.status(401).json({ error: "Unauthorized" });
+    return res.status(500).json({ error: String(err?.message ?? err) });
+  }
+});
+
+// Submit group quiz answer
+app.post("/study-groups/:groupId/quiz/answer", async (req, res) => {
+  try {
+    const user = await requireUser(req);
+    const { groupId } = req.params;
+    const { questionId, answer } = req.body;
+
+    if (questionId === undefined || answer === undefined) {
+      return res.status(400).json({ error: "Missing questionId or answer" });
+    }
+
+    const quizSession = await kvGet(`group-quiz:${groupId}`);
+    if (!quizSession || !quizSession.quiz) {
+      return res.status(404).json({ error: "Quiz not found" });
+    }
+
+    // Initialize user answers if not exists
+    if (!quizSession.answers[user.id]) {
+      quizSession.answers[user.id] = {};
+    }
+
+    // Save answer
+    quizSession.answers[user.id][questionId] = answer;
+    quizSession.updatedAt = new Date().toISOString();
+    await kvSet(`group-quiz:${groupId}`, quizSession);
+
+    return res.json({ success: true });
+  } catch (err) {
+    if (String(err?.message).includes("Unauthorized"))
+      return res.status(401).json({ error: "Unauthorized" });
+    return res.status(500).json({ error: String(err?.message ?? err) });
+  }
+});
+
+// Get group quiz results (aggregate statistics)
+app.get("/study-groups/:groupId/quiz/results", async (req, res) => {
+  try {
+    await requireUser(req);
+    const { groupId } = req.params;
+
+    const quizSession = await kvGet(`group-quiz:${groupId}`);
+    if (!quizSession || !quizSession.quiz) {
+      return res.status(404).json({ error: "Quiz not found" });
+    }
+
+    const questions = quizSession.quiz.questions;
+    const allAnswers = quizSession.answers || {};
+
+    // Calculate statistics for each question
+    const results = questions.map((question) => {
+      let correctCount = 0;
+      let incorrectCount = 0;
+      let unansweredCount = 0;
+
+      const userIds = Object.keys(allAnswers);
+      
+      if (userIds.length === 0) {
+        unansweredCount = 1; // At least show something
+      } else {
+        userIds.forEach((userId) => {
+          const userAnswers = allAnswers[userId];
+          const userAnswer = userAnswers?.[question.id];
+
+          if (userAnswer === undefined || userAnswer === null) {
+            unansweredCount++;
+          } else if (userAnswer === question.correctAnswer) {
+            correctCount++;
+          } else {
+            incorrectCount++;
+          }
+        });
+      }
+
+      return {
+        questionId: question.id,
+        question: question.question,
+        options: question.options,
+        correctAnswer: question.correctAnswer,
+        explanation: question.explanation,
+        correctCount,
+        incorrectCount,
+        unansweredCount,
+      };
+    });
+
+    return res.json({ results });
+  } catch (err) {
+    console.error("Get quiz results error:", err);
+    if (String(err?.message).includes("Unauthorized"))
+      return res.status(401).json({ error: "Unauthorized" });
+    return res.status(500).json({ error: String(err?.message ?? err) });
+  }
+});
+
 // Get active study material
 app.get("/ai/material", async (req, res) => {
   try {
