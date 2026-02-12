@@ -28,6 +28,11 @@ interface Session {
   updatedAt: string;
   files?: FileData[];
   chatHistory?: Message[];
+  quizData?: QuizData;
+  quizSettings?: {
+    count: number;
+    difficulty: string;
+  };
 }
 
 interface QuizQuestion {
@@ -67,6 +72,9 @@ export function SoloStudyPage({ initialSessionId, onSessionsChange }: SoloStudyP
   const [isGeneratingQuiz, setIsGeneratingQuiz] = useState(false);
   const [showQuizResult, setShowQuizResult] = useState(false);
   const [showQuizReview, setShowQuizReview] = useState(false);
+  const [showQuizSettings, setShowQuizSettings] = useState(false);
+  const [quizCount, setQuizCount] = useState(10);
+  const [quizDifficulty, setQuizDifficulty] = useState<'easy' | 'medium' | 'hard'>('medium');
   
   // Current messages based on mode
   const messages = mode === 'student' ? studentMessages : teachMessages;
@@ -95,6 +103,11 @@ export function SoloStudyPage({ initialSessionId, onSessionsChange }: SoloStudyP
           setUploadedFiles([]);
           setStudentMessages([]);
           setTeachMessages([]);
+          setQuizData(null);
+          setCurrentQuestionIndex(0);
+          setAnsweredQuestions({});
+          setShowQuizResult(false);
+          setShowQuizReview(false);
           return;
         }
 
@@ -184,6 +197,11 @@ export function SoloStudyPage({ initialSessionId, onSessionsChange }: SoloStudyP
         setUploadedFiles([]);
         setStudentMessages([]);
         setTeachMessages([]);
+        setQuizData(null);
+        setCurrentQuestionIndex(0);
+        setAnsweredQuestions({});
+        setShowQuizResult(false);
+        setShowQuizReview(false);
         toast.success('New study session created!');
         await loadSessions();
         onSessionsChange?.(); // Notify parent
@@ -211,6 +229,7 @@ export function SoloStudyPage({ initialSessionId, onSessionsChange }: SoloStudyP
     }
 
     setIsGeneratingQuiz(true);
+    setShowQuizSettings(false); // Close settings popup
 
     try {
       const token = localStorage.getItem('accessToken');
@@ -223,7 +242,12 @@ export function SoloStudyPage({ initialSessionId, onSessionsChange }: SoloStudyP
         method: 'POST',
         headers: {
           'Authorization': `Bearer ${token}`,
+          'Content-Type': 'application/json',
         },
+        body: JSON.stringify({
+          count: quizCount,
+          difficulty: quizDifficulty,
+        }),
       });
 
       if (!response.ok) {
@@ -238,7 +262,7 @@ export function SoloStudyPage({ initialSessionId, onSessionsChange }: SoloStudyP
       setAnsweredQuestions({});
       setShowQuizResult(false);
       if (showToast) {
-        toast.success('Quiz generated! 10 questions ready.');
+        toast.success('Quiz generated! Questions ready.');
       }
     } catch (error) {
       console.error('Quiz generation error:', error);
@@ -251,16 +275,9 @@ export function SoloStudyPage({ initialSessionId, onSessionsChange }: SoloStudyP
   // Reset and generate new quiz
   const handleNewQuiz = () => {
     if (window.confirm('Are you sure you want to start a new quiz? Current progress will be lost.')) {
-      generateQuiz();
+      setShowQuizSettings(true);
     }
   };
-
-  // Auto-generate quiz when entering Quiz Phase
-  useEffect(() => {
-    if (mode === 'teach' && teachPhase === 'quiz' && !quizData && currentSession) {
-      generateQuiz();
-    }
-  }, [mode, teachPhase, currentSession]);
 
   const loadSession = async (sessionId: string) => {
     try {
@@ -308,6 +325,23 @@ export function SoloStudyPage({ initialSessionId, onSessionsChange }: SoloStudyP
       } else {
         setTeachMessages([]);
       }
+
+      // Load quiz data if exists
+      if (data.session.quizData) {
+        setQuizData(data.session.quizData);
+        if (data.session.quizSettings) {
+          setQuizCount(data.session.quizSettings.count || 10);
+          setQuizDifficulty(data.session.quizSettings.difficulty || 'medium');
+        }
+      } else {
+        setQuizData(null);
+      }
+
+      // Reset quiz state
+      setCurrentQuestionIndex(0);
+      setAnsweredQuestions({});
+      setShowQuizResult(false);
+      setShowQuizReview(false);
 
       toast.success('Session loaded!');
       }
@@ -737,7 +771,17 @@ export function SoloStudyPage({ initialSessionId, onSessionsChange }: SoloStudyP
                 <Button
                   variant={teachPhase === 'quiz' ? 'default' : 'outline'}
                   size="sm"
-                  onClick={() => setTeachPhase('quiz')}
+                  onClick={() => {
+                    if (teachPhase !== 'quiz') {
+                      // If quiz already exists, just switch to quiz phase
+                      if (quizData && quizData.questions && quizData.questions.length > 0) {
+                        setTeachPhase('quiz');
+                      } else {
+                        // Otherwise, show settings to create new quiz
+                        setShowQuizSettings(true);
+                      }
+                    }
+                  }}
                   className="flex-1"
                 >
                   <BookOpen className="size-4 mr-2" />
@@ -789,7 +833,7 @@ export function SoloStudyPage({ initialSessionId, onSessionsChange }: SoloStudyP
                 <div className="flex-1 flex items-center justify-center">
                   <div className="text-center">
                     <Loader2 className="size-12 animate-spin mx-auto mb-4 text-blue-600" />
-                    <p className="text-sm text-muted-foreground">Generating 10 quiz questions...</p>
+                    <p className="text-sm text-muted-foreground">Generating quiz questions...</p>
                   </div>
                 </div>
               ) : showQuizReview && quizData ? (
@@ -915,8 +959,8 @@ export function SoloStudyPage({ initialSessionId, onSessionsChange }: SoloStudyP
                         className="w-full"
                         size="lg"
                         onClick={() => {
-                          generateQuiz(true);
                           setShowQuizReview(false);
+                          setShowQuizSettings(true);
                         }}
                       >
                         <Plus className="size-5 mr-2" />
@@ -1050,7 +1094,7 @@ export function SoloStudyPage({ initialSessionId, onSessionsChange }: SoloStudyP
                   <div className="text-center">
                     <BookOpen className="size-12 mx-auto mb-4 text-gray-400" />
                     <p className="text-sm text-muted-foreground mb-4">No quiz available</p>
-                    <Button onClick={() => generateQuiz(true)}>Generate Quiz</Button>
+                    <Button onClick={() => setShowQuizSettings(true)}>Generate Quiz</Button>
                   </div>
                 </div>
               )}
@@ -1172,6 +1216,104 @@ export function SoloStudyPage({ initialSessionId, onSessionsChange }: SoloStudyP
           </p>
         </CardContent>
       </Card>
+
+      {/* Quiz Settings Popup */}
+      {showQuizSettings && (
+        <div className="fixed inset-0 bg-black/50 backdrop-blur-sm flex items-center justify-center z-50">
+          <Card className="w-full max-w-md mx-4">
+            <CardHeader>
+              <CardTitle className="text-2xl">Generate Quiz</CardTitle>
+              <p className="text-sm text-muted-foreground">
+                Customize your quiz settings
+              </p>
+            </CardHeader>
+            <CardContent className="space-y-6">
+              {/* Number of Questions */}
+              <div>
+                <label className="text-sm font-semibold mb-3 block">
+                  Number of Questions
+                </label>
+                <div className="flex gap-3">
+                  {[5, 10, 15].map((count) => (
+                    <Button
+                      key={count}
+                      variant={quizCount === count ? 'default' : 'outline'}
+                      onClick={() => setQuizCount(count)}
+                      className="flex-1"
+                    >
+                      {count}
+                    </Button>
+                  ))}
+                </div>
+              </div>
+
+              {/* Difficulty Level */}
+              <div>
+                <label className="text-sm font-semibold mb-3 block">
+                  Difficulty Level
+                </label>
+                <div className="flex flex-col gap-2">
+                  {[
+                    { value: 'easy', label: 'Easy', desc: 'Basic concepts and definitions', emoji: '😊' },
+                    { value: 'medium', label: 'Medium', desc: 'Balanced understanding and application', emoji: '🤔' },
+                    { value: 'hard', label: 'Hard', desc: 'Deep analysis and critical thinking', emoji: '🔥' }
+                  ].map((diff) => (
+                    <Button
+                      key={diff.value}
+                      variant={quizDifficulty === diff.value ? 'default' : 'outline'}
+                      onClick={() => setQuizDifficulty(diff.value as 'easy' | 'medium' | 'hard')}
+                      className="w-full justify-start h-auto py-3"
+                    >
+                      <div className="flex items-start gap-3 text-left">
+                        <span className="text-2xl">{diff.emoji}</span>
+                        <div>
+                          <div className="font-semibold">{diff.label}</div>
+                          <div className="text-xs opacity-80">{diff.desc}</div>
+                        </div>
+                      </div>
+                    </Button>
+                  ))}
+                </div>
+              </div>
+
+              {/* Action Buttons */}
+              <div className="flex gap-3 pt-4 border-t">
+                <Button
+                  variant="outline"
+                  onClick={() => setShowQuizSettings(false)}
+                  className="flex-1"
+                >
+                  Cancel
+                </Button>
+                <Button
+                  onClick={() => {
+                    setTeachPhase('quiz');
+                    setAnsweredQuestions({});
+                    setCurrentQuestionIndex(0);
+                    setShowQuizResult(false);
+                    setShowQuizReview(false);
+                    generateQuiz();
+                  }}
+                  disabled={isGeneratingQuiz}
+                  className="flex-1"
+                >
+                  {isGeneratingQuiz ? (
+                    <>
+                      <Loader2 className="size-4 mr-2 animate-spin" />
+                      Generating...
+                    </>
+                  ) : (
+                    <>
+                      <BookOpen className="size-4 mr-2" />
+                      Generate Quiz
+                    </>
+                  )}
+                </Button>
+              </div>
+            </CardContent>
+          </Card>
+        </div>
+      )}
     </div>
   );
 }
