@@ -658,11 +658,12 @@ export function StudyGroupsPage({ accessToken, userId, currentUserUsername, room
         ) : (
           sortedGroups.map((group, index) => {
             const isHost = group.hostId === userId;
-            const isMember = group.participants.includes(userId);
-            const hasApplied = group.applicants.includes(userId);
-            const isFull = group.participants.length >= group.maxParticipants;
+            const isMember = (group.participants ?? []).includes(userId);
+            const hasApplied = (group.applicants ?? []).includes(userId);
+            const isFull = (group.participants?.length ?? 0) >= (group.maxParticipants ?? 10);
+            const isMeetingStarted = new Date() >= new Date(`${group.date ?? ''}T${group.time || '00:00'}`);
             const colorScheme = pastelColors[index % pastelColors.length];
-            const icon = getSubjectIcon(group.topic);
+            const icon = getSubjectIcon(group.topic ?? '');
 
             return (
               <Card 
@@ -715,7 +716,7 @@ export function StudyGroupsPage({ accessToken, userId, currentUserUsername, room
                   <div className="flex items-center gap-4 text-sm text-gray-700">
                     <div className="flex items-center gap-2">
                       <Clock className="size-4 flex-shrink-0" />
-                      <span>{formatDate(group.date)} • {group.applicants.length + group.participants.length} applicants</span>
+                      <span>{formatDate(group.date ?? '')} • {(group.applicants?.length ?? 0) + (group.participants?.length ?? 0)} applicants</span>
                     </div>
                   </div>
 
@@ -728,17 +729,17 @@ export function StudyGroupsPage({ accessToken, userId, currentUserUsername, room
                       {group.duration || '2 hours'}
                     </Badge>
                     <Badge variant="secondary" className="bg-white/60 text-gray-700 font-medium">
-                      {group.participants.length}/{group.maxParticipants} seats
+                      {group.participants?.length ?? 0}/{group.maxParticipants ?? 10} seats
                     </Badge>
                   </div>
 
                   {/* Applicants management for host */}
-                  {isHost && group.applicants.length > 0 && (
+                  {isHost && (group.applicants?.length ?? 0) > 0 && (
                     <div className="pt-3 border-t border-white/50 space-y-2">
                       <p className="text-sm font-semibold text-gray-900">
-                        Pending Requests ({group.applicants.length})
+                        Pending Requests ({group.applicants?.length ?? 0})
                       </p>
-                      {group.applicants.slice(0, 2).map((applicantId) => {
+                      {(group.applicants ?? []).slice(0, 2).map((applicantId) => {
                         const applicantInfo = group.applicantsWithNames?.find(
                           (item) => item.id === applicantId
                         );
