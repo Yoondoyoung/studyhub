@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef } from 'react';
+import { useState, useEffect, useRef, useMemo } from 'react';
 import { Button } from './ui/button';
 import { Card, CardContent, CardHeader, CardTitle } from './ui/card';
 import {
@@ -119,7 +119,15 @@ export function StudyRoomPage({
   const [quizDifficulty, setQuizDifficulty] = useState<'easy' | 'medium' | 'hard'>('medium');
   const [showQuizCompleted, setShowQuizCompleted] = useState(false);
   const [currentTime, setCurrentTime] = useState(new Date());
+  const [completionStatus, setCompletionStatus] = useState<{ completed: number; total: number; allCompleted: boolean }>({ completed: 0, total: 0, allCompleted: false });
   const fileInputRef = useRef<HTMLInputElement>(null);
+
+  // Check if study time has started
+  const isStudyTime = useMemo(() => {
+    if (!group?.date || !group?.time) return false;
+    const meetingDateTime = new Date(`${group.date}T${group.time}`);
+    return currentTime >= meetingDateTime;
+  }, [group, currentTime]);
 
   // Fetch room details
   useEffect(() => {
@@ -231,6 +239,28 @@ export function StudyRoomPage({
 
     return () => clearInterval(interval);
   }, []);
+
+  // Poll completion status when quiz exists
+  useEffect(() => {
+    if (!quiz || !isStudyTime) return;
+
+    const fetchCompletionStatus = async () => {
+      try {
+        const res = await fetch(`${apiBase}/study-groups/${groupId}/quiz/completion`, {
+          headers: auth(accessToken),
+        });
+        const data = await res.json();
+        setCompletionStatus(data);
+      } catch (e) {
+        console.error('Failed to fetch completion status', e);
+      }
+    };
+
+    fetchCompletionStatus();
+    const interval = setInterval(fetchCompletionStatus, 2000); // Poll every 2 seconds
+
+    return () => clearInterval(interval);
+  }, [quiz, isStudyTime, groupId, accessToken]);
 
   // WebSocket: join room + receive messages
   useEffect(() => {
@@ -516,15 +546,6 @@ export function StudyRoomPage({
   }
 
   const currentQuestion = quiz?.questions[currentQuestionIndex];
-
-  // Check if study time has started
-  const hasStudyStarted = () => {
-    if (!group?.date || !group?.time) return false;
-    const meetingDateTime = new Date(`${group.date}T${group.time}`);
-    return currentTime >= meetingDateTime;
-  };
-
-  const isStudyTime = hasStudyStarted();
   const mapQuery = group ? encodeURIComponent(group.location) : '';
   const mapSrc = `https://www.google.com/maps?q=${mapQuery}&output=embed`;
 
@@ -588,11 +609,38 @@ export function StudyRoomPage({
                   </p>
                 </div>
 
+                {/* Completion Progress */}
+                {!completionStatus.allCompleted && (
+                  <div className="bg-blue-50 border border-blue-200 rounded-lg p-4 mb-6">
+                    <div className="flex items-center justify-center gap-2 mb-2">
+                      <Loader2 className="size-5 text-blue-600 animate-spin" />
+                      <p className="text-sm font-semibold text-blue-900">
+                        Waiting for others...
+                      </p>
+                    </div>
+                    <p className="text-lg font-bold text-blue-700">
+                      {completionStatus.completed} / {completionStatus.total} completed
+                    </p>
+                    <p className="text-xs text-blue-600 mt-2">
+                      Results will be available when everyone finishes
+                    </p>
+                  </div>
+                )}
+
+                {completionStatus.allCompleted && (
+                  <div className="bg-green-50 border border-green-200 rounded-lg p-4 mb-6">
+                    <p className="text-sm font-semibold text-green-900">
+                      ✓ Everyone has completed the quiz!
+                    </p>
+                  </div>
+                )}
+
                 <div className="space-y-3">
                   <Button
                     onClick={handleViewResults}
                     size="lg"
                     className="w-full"
+                    disabled={!completionStatus.allCompleted}
                   >
                     <BookOpen className="size-5 mr-2" />
                     View Results
@@ -615,10 +663,6 @@ export function StudyRoomPage({
                     Start New Quiz
                   </Button>
                 </div>
-
-                <p className="text-xs text-muted-foreground mt-6">
-                  Others can continue at their own pace
-                </p>
               </div>
             </div>
           ) : showResults ? (
@@ -700,7 +744,8 @@ export function StudyRoomPage({
                     variant="outline"
                     size="sm"
                     onClick={handleViewResults}
-                    disabled={Object.keys(userAnswers).length === 0}
+                    disabled={!completionStatus.allCompleted}
+                    title={!completionStatus.allCompleted ? `Waiting for others (${completionStatus.completed}/${completionStatus.total} completed)` : 'View results'}
                   >
                     View Results
                   </Button>
