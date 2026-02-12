@@ -118,6 +118,7 @@ export function StudyRoomPage({
   const [quizCount, setQuizCount] = useState(25);
   const [quizDifficulty, setQuizDifficulty] = useState<'easy' | 'medium' | 'hard'>('medium');
   const [showQuizCompleted, setShowQuizCompleted] = useState(false);
+  const [currentTime, setCurrentTime] = useState(new Date());
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   // Fetch room details
@@ -221,6 +222,15 @@ export function StudyRoomPage({
       }
     }
   }, [quiz, userAnswers]);
+
+  // Update current time every minute to check study start time
+  useEffect(() => {
+    const interval = setInterval(() => {
+      setCurrentTime(new Date());
+    }, 60000); // Update every minute
+
+    return () => clearInterval(interval);
+  }, []);
 
   // WebSocket: join room + receive messages
   useEffect(() => {
@@ -507,6 +517,17 @@ export function StudyRoomPage({
 
   const currentQuestion = quiz?.questions[currentQuestionIndex];
 
+  // Check if study time has started
+  const hasStudyStarted = () => {
+    if (!group?.date || !group?.time) return false;
+    const meetingDateTime = new Date(`${group.date}T${group.time}`);
+    return currentTime >= meetingDateTime;
+  };
+
+  const isStudyTime = hasStudyStarted();
+  const mapQuery = group ? encodeURIComponent(group.location) : '';
+  const mapSrc = `https://www.google.com/maps?q=${mapQuery}&output=embed`;
+
   return (
     <div className="space-y-4">
       <div className="flex items-center gap-4">
@@ -538,9 +559,24 @@ export function StudyRoomPage({
       </div>
 
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
-        {/* Left: Group Quiz */}
-        <div className="lg:col-span-2 rounded-lg border bg-white h-[520px] min-h-[280px] flex flex-col">
-          {showQuizCompleted && !showResults ? (
+        {/* Left: Map or Group Quiz */}
+        {!isStudyTime ? (
+          /* Before Study Time - Show Map */
+          <div className="lg:col-span-2 rounded-lg overflow-hidden border bg-gray-100 h-[520px] min-h-[280px]">
+            <iframe
+              title="Meeting location"
+              src={mapSrc}
+              className="w-full h-full"
+              style={{ border: 0 }}
+              allowFullScreen
+              loading="lazy"
+              referrerPolicy="no-referrer-when-downgrade"
+            />
+          </div>
+        ) : (
+          /* After Study Time - Show Group Quiz */
+          <div className="lg:col-span-2 rounded-lg border bg-white h-[520px] min-h-[280px] flex flex-col">
+            {showQuizCompleted && !showResults ? (
             /* Quiz Completed View */
             <div className="flex-1 flex items-center justify-center p-6">
               <div className="text-center max-w-md">
@@ -786,7 +822,8 @@ export function StudyRoomPage({
               </div>
             </div>
           )}
-        </div>
+          </div>
+        )}
 
         {/* Right: Users + chat */}
         <div className="lg:col-span-1 h-[520px] flex flex-col gap-4">
@@ -887,6 +924,44 @@ export function StudyRoomPage({
           </Card>
         </div>
       </div>
+
+      {/* Room Info (only shown before study time) */}
+      {!isStudyTime && group && (
+        <Card>
+          <CardHeader className="pb-2">
+            <CardTitle className="text-lg">Meeting Information</CardTitle>
+          </CardHeader>
+          <CardContent className="space-y-3">
+            <div className="flex items-start gap-2 text-sm">
+              <BookOpen className="size-4 mt-0.5 flex-shrink-0 text-muted-foreground" />
+              <span><strong>Topic:</strong> {group.topic}</span>
+            </div>
+            <div className="flex items-start gap-2 text-sm">
+              <Users className="size-4 mt-0.5 flex-shrink-0 text-muted-foreground" />
+              <span><strong>Location:</strong> {group.location}</span>
+            </div>
+            <div className="flex items-center gap-2 text-sm">
+              <span className="text-muted-foreground">📅</span>
+              <span><strong>Date:</strong> {group.date}</span>
+            </div>
+            <div className="flex items-center gap-2 text-sm">
+              <span className="text-muted-foreground">🕐</span>
+              <span><strong>Time:</strong> {group.time || '—'}</span>
+            </div>
+            <div className="text-sm text-muted-foreground pt-2 border-t">
+              {(group.participantsWithNames ?? []).length} / {group.maxParticipants} participants
+            </div>
+            <div className="bg-blue-50 border border-blue-200 rounded-lg p-3 mt-4">
+              <p className="text-sm text-blue-900">
+                <strong>💡 Quiz will be available at {group.time}</strong>
+              </p>
+              <p className="text-xs text-blue-700 mt-1">
+                Review the location and prepare your study materials!
+              </p>
+            </div>
+          </CardContent>
+        </Card>
+      )}
 
       {/* Quiz Settings Popup */}
       {showQuizSettings && (
