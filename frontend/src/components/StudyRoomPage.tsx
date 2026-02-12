@@ -213,9 +213,9 @@ export function StudyRoomPage({
         currentQuestionIndex,
         userAnswers,
       };
-      localStorage.setItem(`quiz-progress-${groupId}`, JSON.stringify(progress));
+      localStorage.setItem(`quiz-progress-${groupId}-${currentUserId}`, JSON.stringify(progress));
     }
-  }, [currentQuestionIndex, userAnswers, groupId, quiz]);
+  }, [currentQuestionIndex, userAnswers, groupId, currentUserId, quiz]);
 
   // Check if quiz is completed
   useEffect(() => {
@@ -362,7 +362,7 @@ export function StudyRoomPage({
         setQuiz(data.quiz);
         
         // Restore quiz progress from localStorage
-        const savedProgress = localStorage.getItem(`quiz-progress-${groupId}`);
+        const savedProgress = localStorage.getItem(`quiz-progress-${groupId}-${currentUserId}`);
         if (savedProgress) {
           try {
             const progress = JSON.parse(savedProgress);
@@ -442,7 +442,7 @@ export function StudyRoomPage({
       setShowQuizCompleted(false);
       
       // Clear saved progress for new quiz
-      localStorage.removeItem(`quiz-progress-${groupId}`);
+      localStorage.removeItem(`quiz-progress-${groupId}-${currentUserId}`);
       
       toast.success('Quiz generated!');
     } catch (error) {
