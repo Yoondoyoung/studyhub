@@ -103,6 +103,7 @@ export function StudyRoomPage({
   const chatScrollRef = useRef<HTMLDivElement | null>(null);
   const chatAutoScrollRef = useRef(true);
   const socketRef = useRef<WebSocket | null>(null);
+  const [joinBlocked, setJoinBlocked] = useState(false);
 
   // Group Quiz States
   const [uploadedFiles, setUploadedFiles] = useState<UploadedFile[]>([]);
@@ -128,7 +129,12 @@ export function StudyRoomPage({
           headers: auth(accessToken),
         });
         const data = await res.json();
-        if (!cancelled && data.group) setGroup(data.group);
+        if (!cancelled && data.group) {
+          setGroup(data.group);
+          if (!data.group.participants?.includes(currentUserId)) {
+            setJoinBlocked(true);
+          }
+        }
       } catch (e) {
         if (!cancelled) console.error('Failed to fetch room', e);
       } finally {
@@ -143,20 +149,29 @@ export function StudyRoomPage({
     let cancelled = false;
     (async () => {
       try {
+        if (joinBlocked) return;
         const res = await fetch(`${apiBase}/study-groups/${groupId}/presence`, {
           method: 'POST',
           headers: { ...auth(accessToken), 'Content-Type': 'application/json' },
         });
+        if (!res.ok) {
+          if (!cancelled && res.status === 403) {
+            setJoinBlocked(true);
+            toast.error('You need to be accepted to join this room.');
+          }
+          return;
+        }
         if (res.ok && !cancelled) joinedRef.current = true;
       } catch (e) {
         if (!cancelled) console.error('Failed to join presence', e);
       }
     })();
     return () => { cancelled = true; };
-  }, [groupId, accessToken]);
+  }, [groupId, accessToken, joinBlocked]);
 
   // Fetch room chat history
   useEffect(() => {
+    if (joinBlocked) return;
     let cancelled = false;
     (async () => {
       try {
@@ -170,7 +185,7 @@ export function StudyRoomPage({
       }
     })();
     return () => { cancelled = true; };
-  }, [groupId, accessToken]);
+  }, [groupId, accessToken, joinBlocked]);
 
   // Load quiz files
   useEffect(() => {
@@ -209,6 +224,7 @@ export function StudyRoomPage({
 
   // WebSocket: join room + receive messages
   useEffect(() => {
+    if (joinBlocked) return;
     const socket = new WebSocket(buildWsUrl(accessToken));
     socketRef.current = socket;
     setSocketReady(false);
@@ -225,6 +241,10 @@ export function StudyRoomPage({
     socket.onmessage = (event) => {
       try {
         const payload = JSON.parse(event.data);
+        if (payload?.type === 'room:error') {
+          toast.error(payload.message || 'Unable to join room');
+          return;
+        }
         if (payload?.type !== 'room:message' || !payload?.message) return;
         const message = payload.message as RoomMessage;
         if (message.roomId !== groupId) return;
@@ -251,7 +271,7 @@ export function StudyRoomPage({
       socket.close();
       socketRef.current = null;
     };
-  }, [groupId, accessToken]);
+  }, [groupId, accessToken, joinBlocked]);
 
   useEffect(() => {
     const container = chatScrollRef.current;
@@ -263,6 +283,7 @@ export function StudyRoomPage({
 
   // Poll presence list
   useEffect(() => {
+    if (joinBlocked) return;
     const fetchPresence = async () => {
       try {
         const res = await fetch(`${apiBase}/study-groups/${groupId}/presence`, {
@@ -277,7 +298,7 @@ export function StudyRoomPage({
     fetchPresence();
     const interval = setInterval(fetchPresence, 2000);
     return () => clearInterval(interval);
-  }, [groupId, accessToken]);
+  }, [groupId, accessToken, joinBlocked]);
 
   const loadQuizFiles = async () => {
     try {

@@ -309,7 +309,15 @@ app.get("/study-groups", async (_req, res) => {
       if (applyNoShowCleanup(group)) await kvSet(`study-group:${group.id}`, group);
       const hostProfile = group.hostId ? await kvGet(`user:${group.hostId}`) : null;
       const hostUsername = hostProfile?.username ?? hostProfile?.email ?? (group.hostId?.slice(0, 8) ?? "—");
-      groups.push({ ...group, hostUsername });
+      const applicantsWithNames = [];
+      for (const id of group.applicants || []) {
+        const profile = await kvGet(`user:${id}`);
+        applicantsWithNames.push({
+          id,
+          username: profile?.username ?? profile?.email ?? id.slice(0, 8),
+        });
+      }
+      groups.push({ ...group, hostUsername, applicantsWithNames });
     }
     return res.json({ groups });
   } catch (err) {
@@ -342,10 +350,13 @@ app.get("/study-groups/:id", async (req, res) => {
 
 app.get("/study-groups/:id/presence", async (req, res) => {
   try {
-    await requireUser(req);
+    const user = await requireUser(req);
     const groupId = req.params.id;
     const group = await kvGet(`study-group:${groupId}`);
     if (!group) return res.status(404).json({ error: "Group not found" });
+    if (!group.participants?.includes(user.id)) {
+      return res.status(403).json({ error: "Not accepted" });
+    }
     const presence = (await kvGet(`room-presence:${groupId}`)) || { users: [] };
     return res.json({ presence: presence.users });
   } catch (err) {
@@ -357,9 +368,14 @@ app.get("/study-groups/:id/presence", async (req, res) => {
 
 app.get("/study-groups/:id/chat", async (req, res) => {
   try {
-    await requireUser(req);
+    const user = await requireUser(req);
     const roomId = String(req.params.id || "");
     if (!roomId) return res.status(400).json({ error: "Room id required" });
+    const group = await kvGet(`study-group:${roomId}`);
+    if (!group) return res.status(404).json({ error: "Group not found" });
+    if (!group.participants?.includes(user.id)) {
+      return res.status(403).json({ error: "Not accepted" });
+    }
     const { messages } = await getRoomChat(roomId);
     return res.json({ messages });
   } catch (err) {
@@ -376,14 +392,9 @@ app.post("/study-groups/:id/presence", async (req, res) => {
     const group = await kvGet(`study-group:${groupId}`);
     if (!group) return res.status(404).json({ error: "Group not found" });
     const participantIds = group.participants || [];
-    const hasSeats = participantIds.length < (group.maxParticipants || 0);
     const isParticipant = participantIds.includes(user.id);
-    if (!isParticipant && !hasSeats)
-      return res.status(403).json({ error: "Room is full" });
-    if (!isParticipant && hasSeats) {
-      group.participants = group.participants || [];
-      group.participants.push(user.id);
-      await kvSet(`study-group:${groupId}`, group);
+    if (!isParticipant) {
+      return res.status(403).json({ error: "Not accepted" });
     }
     const profile = await kvGet(`user:${user.id}`);
     const username = profile?.username ?? profile?.email ?? user.id?.slice(0, 8) ?? "User";
@@ -2104,6 +2115,11 @@ wss.on("connection", async (socket, req) => {
         if (payload?.type === "room:join") {
           const roomId = String(payload?.roomId ?? "");
           if (!roomId) return;
+          const group = await kvGet(`study-group:${roomId}`);
+          if (!group || !group.participants?.includes(socket.userId)) {
+            socket.send(JSON.stringify({ type: "room:error", message: "Not accepted" }));
+            return;
+          }
           joinRoom(roomId, socket);
           return;
         }
@@ -2121,6 +2137,11 @@ wss.on("connection", async (socket, req) => {
           const clientId = payload?.clientId ? String(payload.clientId) : null;
           if (!roomId || !content) return;
           if (!socket.userId) return;
+          const group = await kvGet(`study-group:${roomId}`);
+          if (!group || !group.participants?.includes(socket.userId)) {
+            socket.send(JSON.stringify({ type: "room:error", message: "Not accepted" }));
+            return;
+          }
 
           const message = {
             id: crypto.randomUUID(),

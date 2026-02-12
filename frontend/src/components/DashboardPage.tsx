@@ -3,7 +3,7 @@ import { Button } from './ui/button';
 import { Input } from './ui/input';
 import { Label } from './ui/label';
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger } from './ui/dialog';
-import { Plus, CheckCircle2, Pencil } from 'lucide-react';
+import { Plus, CheckCircle2, Pencil, Trash2 } from 'lucide-react';
 import { toast } from 'sonner';
 import { Avatar, AvatarFallback, AvatarImage } from './ui/avatar';
 import { Switch } from './ui/switch';
@@ -624,6 +624,8 @@ export function DashboardPage({ accessToken, userName, currentUserId }: Dashboar
   };
 
   const getPercentage = (current: number, goal: number) => {
+    if (!goal || goal <= 0) return 0;
+    if (!current || current <= 0) return 0;
     return Math.min((current / goal) * 100, 100);
   };
 
@@ -910,14 +912,28 @@ export function DashboardPage({ accessToken, userName, currentUserId }: Dashboar
                 </Dialog>
               </div>
 
-              <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-5 gap-4">
-                {(todos.length ? todos.slice(0, 5) : Array.from({ length: 5 }).map((_, index) => ({
-                  id: `placeholder-${index}`,
-                  name: `Task ${index + 1}`,
-                  subject: '',
-                  duration: 0,
-                  completed: false
-                }))).map((todo) => {
+              {todos.length === 0 ? (
+                <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-5 gap-4">
+                  <button
+                    className="bg-white rounded-2xl p-4 shadow-sm border border-white/70 flex flex-col justify-between min-h-[160px] cursor-pointer hover:shadow-md transition"
+                    onClick={() => setIsAddDialogOpen(true)}
+                  >
+                    <div className="flex items-start justify-between">
+                      <div className="size-10 rounded-full bg-gray-100" />
+                      <span className="text-sm text-gray-300">•••</span>
+                    </div>
+                    <div>
+                      <p className="text-sm font-semibold text-gray-900">+</p>
+                      <p className="text-xs text-gray-400">Add task</p>
+                    </div>
+                    <span className="self-end px-2 py-1 rounded-full text-[10px] font-semibold bg-rose-100 text-rose-700">
+                      0%
+                    </span>
+                  </button>
+                </div>
+              ) : (
+                <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-5 gap-4">
+                  {todos.slice(0, 5).map((todo) => {
                   const plannedSeconds = getPlannedSeconds(todo);
                   const progressPercent = getProgressPercent(todo);
                   const pillColor =
@@ -927,16 +943,14 @@ export function DashboardPage({ accessToken, userName, currentUserId }: Dashboar
                       ? 'bg-amber-100 text-amber-700'
                       : 'bg-rose-100 text-rose-700';
 
-                  const isPlaceholder = String(todo.id).startsWith('placeholder-');
-                  const isActive = !isPlaceholder && activeTimer === todo.id;
+                  const isActive = activeTimer === todo.id;
 
                   return (
                     <div
                       key={todo.id}
-                      role={isPlaceholder ? undefined : "button"}
-                      tabIndex={isPlaceholder ? undefined : 0}
+                      role="button"
+                      tabIndex={0}
                       onClick={() => {
-                        if (isPlaceholder) return;
                         if (isActive) {
                           stopTimer(todo as Todo);
                         } else {
@@ -944,7 +958,6 @@ export function DashboardPage({ accessToken, userName, currentUserId }: Dashboar
                         }
                       }}
                       onKeyDown={(event) => {
-                        if (isPlaceholder) return;
                         if (event.key === 'Enter' || event.key === ' ') {
                           event.preventDefault();
                           if (isActive) {
@@ -954,26 +967,22 @@ export function DashboardPage({ accessToken, userName, currentUserId }: Dashboar
                           }
                         }
                       }}
-                      className={`bg-white rounded-2xl p-4 shadow-sm border border-white/70 flex flex-col justify-between min-h-[160px] ${
-                        isPlaceholder ? '' : 'cursor-pointer hover:shadow-md'
-                      } ${isActive ? 'ring-2 ring-emerald-300' : ''}`}
+                      className={`bg-white rounded-2xl p-4 shadow-sm border border-white/70 flex flex-col justify-between min-h-[160px] cursor-pointer hover:shadow-md ${
+                        isActive ? 'ring-2 ring-emerald-300' : ''
+                      }`}
                     >
                       <div className="flex items-start justify-between">
                         <div className="size-10 rounded-full bg-gray-100" />
-                        {!isPlaceholder ? (
-                          <button
-                            className="text-sm text-gray-400 hover:text-gray-600"
-                            onClick={(event) => {
-                              event.stopPropagation();
-                              openEditDialog(todo as Todo);
-                            }}
-                            type="button"
-                          >
-                            •••
-                          </button>
-                        ) : (
-                          <span className="text-sm text-gray-300">•••</span>
-                        )}
+                        <button
+                          className="text-sm text-gray-400 hover:text-gray-600"
+                          onClick={(event) => {
+                            event.stopPropagation();
+                            openEditDialog(todo as Todo);
+                          }}
+                          type="button"
+                        >
+                          •••
+                        </button>
                       </div>
                       <div>
                         <p className="text-sm font-semibold text-gray-900">{todo.name}</p>
@@ -986,8 +995,9 @@ export function DashboardPage({ accessToken, userName, currentUserId }: Dashboar
                       </span>
                     </div>
                   );
-                })}
-              </div>
+                  })}
+                </div>
+              )}
             </div>
           </div>
 
@@ -1129,7 +1139,21 @@ export function DashboardPage({ accessToken, userName, currentUserId }: Dashboar
                       className="data-[state=unchecked]:bg-gray-200 data-[state=checked]:bg-teal-600"
                     />
                   </div>
-                  <div className="flex justify-end gap-2">
+                  <div className="flex items-center justify-between gap-2">
+                    <Button
+                      variant="destructive"
+                      className="gap-2"
+                      onClick={() => {
+                        if (!editingTodoId) return;
+                        handleDeleteTodo(editingTodoId);
+                        setIsEditDialogOpen(false);
+                        setEditingTodoId(null);
+                      }}
+                    >
+                      <Trash2 className="size-4" />
+                      Delete
+                    </Button>
+                    <div className="flex justify-end gap-2">
                     <Button
                       variant="ghost"
                       onClick={() => {
@@ -1143,15 +1167,15 @@ export function DashboardPage({ accessToken, userName, currentUserId }: Dashboar
                       <Pencil className="size-4" />
                       Save changes
                     </Button>
+                    </div>
                   </div>
                 </div>
               </DialogContent>
             </Dialog>
           </div>
 
-        <div className="xl:col-span-4">
-          <div className="rounded-[36px] bg-white/60 shadow-[0_30px_80px_rgba(15,23,42,0.08)] p-6 space-y-6 h-[720px] flex flex-col overflow-hidden">
-            <div className="space-y-6 overflow-y-auto pr-1">
+        <div className="xl:col-span-4 h-full">
+          <div className="rounded-[36px] bg-white/60 shadow-[0_30px_80px_rgba(15,23,42,0.08)] p-6 space-y-6 h-full">
             <div className="bg-white/90 rounded-3xl shadow-[0_20px_60px_rgba(15,23,42,0.08)] p-5">
               <h3 className="text-base font-semibold text-gray-900 mb-4">Nearby Study Rooms</h3>
               <div className="space-y-3">
@@ -1243,7 +1267,6 @@ export function DashboardPage({ accessToken, userName, currentUserId }: Dashboar
                   </div>
                 ))}
               </div>
-            </div>
             </div>
           </div>
         </div>
