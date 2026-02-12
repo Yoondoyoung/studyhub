@@ -6,9 +6,9 @@ import { apiBase } from '../utils/api';
 
 interface Friend {
   id: string;
-  username: string;
-  email: string;
-  category: string;
+  username?: string;
+  email?: string;
+  category?: string;
   profileImageUrl?: string;
 }
 
@@ -110,17 +110,17 @@ export function FriendDetailPage({ accessToken, friend, onBack }: FriendDetailPa
           <ArrowLeft className="size-4 mr-2" />
           Back
         </Button>
-        <h1 className="text-3xl font-bold">{friend.username}</h1>
+        <h1 className="text-3xl font-bold">{friend.username || friend.email || 'Friend'}</h1>
       </div>
 
       <Card>
         <CardHeader>
           <CardTitle>Profile</CardTitle>
-          <p className="text-sm text-muted-foreground">{friend.email}</p>
+          <p className="text-sm text-muted-foreground">{friend.email || '—'}</p>
         </CardHeader>
         <CardContent className="space-y-4">
           <p className="text-sm">
-            <span className="font-medium">Major:</span> {friend.category}
+            <span className="font-medium">Major:</span> {friend.category || '—'}
           </p>
           <div className="flex items-center gap-2">
             <Clock className="size-5 text-blue-600" />

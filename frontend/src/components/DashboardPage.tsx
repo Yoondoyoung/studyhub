@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef } from 'react';
+import { useState, useEffect } from 'react';
 import { Button } from './ui/button';
 import { Input } from './ui/input';
 import { Label } from './ui/label';
@@ -23,8 +23,7 @@ interface Todo {
 
 interface DashboardPageProps {
   accessToken: string;
-  userName?: string;
-  currentUserId: string;
+  onOpenChat: (friend: Friend) => void;
 }
 
 interface Friend {
@@ -45,17 +44,7 @@ interface StudyRoom {
   icon?: string;
 }
 
-interface ChatMessage {
-  id: string;
-  clientId?: string | null;
-  senderId: string;
-  recipientId: string;
-  content: string;
-  createdAt: string;
-  pending?: boolean;
-}
-
-export function DashboardPage({ accessToken, userName, currentUserId }: DashboardPageProps) {
+export function DashboardPage({ accessToken, onOpenChat }: DashboardPageProps) {
   const TIMER_STORAGE_KEY = 'studyhub_active_timer';
   const [todos, setTodos] = useState<Todo[]>([]);
   const [dailyTotal, setDailyTotal] = useState(0);
@@ -80,20 +69,6 @@ export function DashboardPage({ accessToken, userName, currentUserId }: Dashboar
   const [studyStreak, setStudyStreak] = useState<{ day: string; completed: boolean }[]>([]);
   const heatmapColumns = 52;
 
-  const [chatFriend, setChatFriend] = useState<Friend | null>(null);
-  const [chatInput, setChatInput] = useState('');
-  const [chatLoading, setChatLoading] = useState(false);
-  const [chatMessagesByFriend, setChatMessagesByFriend] = useState<Record<string, ChatMessage[]>>({});
-  const [socketReady, setSocketReady] = useState(false);
-  const [chatPanelOpen, setChatPanelOpen] = useState(false);
-  const [recentChatFriends, setRecentChatFriends] = useState<Friend[]>([]);
-  const [chatNotifications, setChatNotifications] = useState<Record<string, boolean>>({});
-  const socketRef = useRef<WebSocket | null>(null);
-  const friendsRef = useRef<Friend[]>([]);
-  const chatFriendRef = useRef<Friend | null>(null);
-  const chatPanelOpenRef = useRef(false);
-  const chatScrollRef = useRef<HTMLDivElement | null>(null);
-  const chatAutoScrollRef = useRef(true);
   
   const [newTodo, setNewTodo] = useState({
     name: '',
@@ -160,80 +135,6 @@ export function DashboardPage({ accessToken, userName, currentUserId }: Dashboar
       // ignore invalid stored timer data
     }
   }, []);
-
-  useEffect(() => {
-    friendsRef.current = friends;
-  }, [friends]);
-
-  useEffect(() => {
-    chatFriendRef.current = chatFriend;
-  }, [chatFriend]);
-
-  useEffect(() => {
-    chatPanelOpenRef.current = chatPanelOpen;
-  }, [chatPanelOpen]);
-
-  useEffect(() => {
-    if (!chatFriend || !chatPanelOpen) return;
-    const container = chatScrollRef.current;
-    if (!container) return;
-    if (chatAutoScrollRef.current) {
-      container.scrollTop = container.scrollHeight;
-    }
-  }, [chatMessagesByFriend, chatFriend, chatPanelOpen]);
-
-  useEffect(() => {
-    const socket = new WebSocket(buildWsUrl());
-    socketRef.current = socket;
-    setSocketReady(false);
-
-    socket.onopen = () => {
-      setSocketReady(true);
-    };
-
-    socket.onclose = () => {
-      setSocketReady(false);
-    };
-
-    socket.onmessage = (event) => {
-      try {
-        const payload = JSON.parse(event.data);
-        if (payload?.type !== 'chat:message' || !payload?.message) return;
-        const message = payload.message as ChatMessage;
-        const friendId =
-          message.senderId === currentUserId ? message.recipientId : message.senderId;
-        upsertChatMessage(friendId, message);
-        if (message.senderId !== currentUserId) {
-          const activeFriendId = chatFriendRef.current?.id;
-          const isChatOpen = chatPanelOpenRef.current;
-          if (!isChatOpen || activeFriendId !== friendId) {
-            const friendInfo =
-              friendsRef.current.find((friend) => friend.id === friendId) ||
-              chatFriendRef.current ||
-              {
-                id: friendId,
-                username: 'Friend',
-                email: '',
-                lastActivityAt: null,
-                profileImageUrl: ''
-              };
-            setRecentChatFriends((prev) => {
-              const next = [friendInfo as Friend, ...prev.filter((item) => item.id !== friendId)];
-              return next.slice(0, 3);
-            });
-            setChatNotifications((prev) => ({ ...prev, [friendId]: true }));
-          }
-        }
-      } catch (error) {
-        console.error('Failed to parse chat message:', error);
-      }
-    };
-
-    return () => {
-      socket.close();
-      socketRef.current = null;
-    };
-  }, [accessToken, currentUserId]);
 
   const fetchTodos = async () => {
     try {
@@ -358,91 +259,6 @@ export function DashboardPage({ accessToken, userName, currentUserId }: Dashboar
     }
   };
 
-  const buildWsUrl = () => {
-    const base = apiBase.replace(/^http/, 'ws');
-    return `${base}/ws?token=${encodeURIComponent(accessToken)}`;
-  };
-
-  const getChatMessages = (friendId: string) => chatMessagesByFriend[friendId] || [];
-
-  const upsertChatMessage = (friendId: string, message: ChatMessage) => {
-    setChatMessagesByFriend((prev) => {
-      const existing = prev[friendId] || [];
-      if (message.clientId) {
-        const index = existing.findIndex((item) => item.clientId === message.clientId);
-        if (index !== -1) {
-          const next = [...existing];
-          next[index] = { ...message, pending: false };
-          return { ...prev, [friendId]: next };
-        }
-      }
-      return { ...prev, [friendId]: [...existing, message] };
-    });
-  };
-
-  const loadChatHistory = async (friend: Friend) => {
-    setChatLoading(true);
-    try {
-      const response = await fetch(`${apiBase}/dm/${friend.id}`, {
-        headers: { Authorization: `Bearer ${accessToken}` }
-      });
-      const data = await response.json();
-      setChatMessagesByFriend((prev) => ({
-        ...prev,
-        [friend.id]: Array.isArray(data.messages) ? data.messages : []
-      }));
-    } catch (error) {
-      console.error('Failed to fetch chat history:', error);
-    } finally {
-      setChatLoading(false);
-    }
-  };
-
-  const handleOpenChat = async (friend: Friend) => {
-    setChatFriend(friend);
-    setChatPanelOpen(true);
-    setRecentChatFriends((prev) => {
-      const next = [friend, ...prev.filter((item) => item.id !== friend.id)];
-      return next.slice(0, 3);
-    });
-    setChatNotifications((prev) => ({ ...prev, [friend.id]: false }));
-    await loadChatHistory(friend);
-  };
-
-  const handleEndChat = () => {
-    if (chatFriend) {
-      setRecentChatFriends((prev) => prev.filter((item) => item.id !== chatFriend.id));
-      setChatNotifications((prev) => ({ ...prev, [chatFriend.id]: false }));
-    }
-    setChatPanelOpen(false);
-    setChatFriend(null);
-    setChatInput('');
-  };
-
-  const handleSendChat = () => {
-    if (!chatFriend || !chatInput.trim() || !socketRef.current || !socketReady) return;
-    const clientId = crypto.randomUUID();
-    const content = chatInput.trim();
-    const tempMessage: ChatMessage = {
-      id: clientId,
-      clientId,
-      senderId: currentUserId,
-      recipientId: chatFriend.id,
-      content,
-      createdAt: new Date().toISOString(),
-      pending: true
-    };
-    upsertChatMessage(chatFriend.id, tempMessage);
-    socketRef.current.send(
-      JSON.stringify({
-        type: 'chat:send',
-        recipientId: chatFriend.id,
-        content,
-        clientId
-      })
-    );
-    setChatInput('');
-  };
 
   const handleAddTodo = async () => {
     if (!newTodo.name.trim()) {
@@ -780,10 +596,6 @@ export function DashboardPage({ accessToken, userName, currentUserId }: Dashboar
 
   return (
     <div className="space-y-6">
-      <div>
-        <h1 className="text-3xl font-semibold text-gray-900">Hi {userName || 'there'},</h1>
-      </div>
-
       <div className="grid grid-cols-1 xl:grid-cols-12 gap-6 items-stretch">
         <div className="xl:col-span-8 space-y-6">
           <div className="rounded-[36px] bg-white/60 shadow-[0_30px_80px_rgba(15,23,42,0.08)] p-6 space-y-6">
@@ -1239,7 +1051,7 @@ export function DashboardPage({ accessToken, userName, currentUserId }: Dashboar
                             : 'bg-rose-100 text-rose-600'
                         }`}
                         onClick={() => {
-                          if (!isPlaceholder) handleOpenChat(friend);
+                          if (!isPlaceholder) onOpenChat(friend);
                         }}
                         disabled={isPlaceholder}
                       >
@@ -1271,124 +1083,6 @@ export function DashboardPage({ accessToken, userName, currentUserId }: Dashboar
           </div>
         </div>
 
-        {!chatPanelOpen && recentChatFriends.length > 0 && (
-          <div className="fixed bottom-6 right-6 z-40 flex items-center gap-2">
-            {recentChatFriends.map((friend) => {
-              const latest =
-                friends.find((item) => item.id === friend.id) || friend;
-              const isOnline = getActivityStatus(latest).isOnline;
-              const isNotified = Boolean(chatNotifications[friend.id]);
-              const ringClass = isNotified
-                ? 'ring-2 ring-emerald-400 animate-pulse'
-                : isOnline
-                ? 'ring-2 ring-emerald-200'
-                : '';
-              return (
-                <button
-                  key={friend.id}
-                  className={`size-12 rounded-full bg-white shadow-[0_20px_40px_rgba(15,23,42,0.18)] flex items-center justify-center hover:scale-[1.02] transition ${ringClass}`}
-                  onClick={() => handleOpenChat(latest)}
-                  title={latest.username || latest.email || 'Chat'}
-                >
-                  <Avatar className="size-10">
-                    {latest.profileImageUrl ? (
-                      <AvatarImage src={latest.profileImageUrl} alt={latest.username || 'Friend'} />
-                    ) : null}
-                    <AvatarFallback className="bg-gray-100 text-gray-600 text-xs font-semibold">
-                      {getInitials(latest.username || latest.email || 'F')}
-                    </AvatarFallback>
-                  </Avatar>
-                </button>
-              );
-            })}
-          </div>
-        )}
-
-        {chatFriend && chatPanelOpen && (
-          <div className="fixed bottom-6 right-6 z-40 w-[360px] h-[480px] rounded-3xl shadow-[0_20px_60px_rgba(15,23,42,0.18)] bg-white/95 border border-white/70 backdrop-blur">
-            <div className="p-4 border-b border-gray-100 flex items-center justify-between">
-              <div>
-                <p className="text-sm font-semibold text-gray-900">
-                  {chatFriend ? chatFriend.username || chatFriend.email || 'Friend' : 'Chat'}
-                </p>
-                <p className="text-[10px] text-gray-400">
-                  {socketReady ? 'Connected' : 'Connecting...'}
-                  {chatLoading ? ' • Loading history...' : ''}
-                </p>
-              </div>
-              <div className="flex items-center gap-2">
-                <button
-                  className="text-[10px] text-gray-400 hover:text-gray-600"
-                  onClick={() => setChatPanelOpen(false)}
-                >
-                  Close
-                </button>
-                <button
-                  className="text-[10px] text-gray-400 hover:text-gray-600"
-                  onClick={handleEndChat}
-                >
-                  End
-                </button>
-              </div>
-            </div>
-            <div
-              ref={chatScrollRef}
-              className="h-[320px] overflow-y-auto px-4 py-3 space-y-3"
-              onScroll={(event) => {
-                const target = event.currentTarget;
-                const distanceFromBottom =
-                  target.scrollHeight - target.scrollTop - target.clientHeight;
-                chatAutoScrollRef.current = distanceFromBottom < 32;
-              }}
-            >
-              {!chatFriend ? null : (getChatMessages(chatFriend.id).length ? (
-                getChatMessages(chatFriend.id).map((message) => {
-                  const isMine = message.senderId === currentUserId;
-                  return (
-                    <div
-                      key={message.id}
-                      className={`flex ${isMine ? 'justify-end' : 'justify-start'}`}
-                    >
-                      <div
-                        className={`max-w-[75%] rounded-2xl px-3 py-2 text-xs ${
-                          isMine ? 'bg-emerald-500 text-white' : 'bg-gray-100 text-gray-700'
-                        } ${message.pending ? 'opacity-70' : ''}`}
-                      >
-                        <p className="whitespace-pre-wrap">{message.content}</p>
-                        <p className="mt-1 text-[10px] opacity-70">
-                          {new Date(message.createdAt).toLocaleTimeString('en-US', {
-                            hour: '2-digit',
-                            minute: '2-digit'
-                          })}
-                        </p>
-                      </div>
-                    </div>
-                  );
-                })
-              ) : (
-                <div className="h-full flex items-center justify-center text-xs text-gray-400">
-                  No messages yet. Say hi!
-                </div>
-              ))}
-            </div>
-            <div className="p-3 border-t border-gray-100 flex items-center gap-2">
-              <Input
-                placeholder="Type a message..."
-                value={chatInput}
-                onChange={(event) => setChatInput(event.target.value)}
-                onKeyDown={(event) => {
-                  if (event.key === 'Enter') {
-                    event.preventDefault();
-                    handleSendChat();
-                  }
-                }}
-              />
-              <Button onClick={handleSendChat} disabled={!chatInput.trim() || !socketReady}>
-                Send
-              </Button>
-            </div>
-          </div>
-        )}
       </div>
     </div>
   );

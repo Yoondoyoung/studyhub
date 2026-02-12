@@ -295,15 +295,10 @@ export function StudyGroupsPage({ accessToken, userId, currentUserUsername, room
   };
 
   return (
-    <div className="space-y-6">
-      <div className="flex justify-between items-center">
-        <div>
-          <h1 className="text-4xl font-bold bg-gradient-to-r from-purple-600 to-pink-600 bg-clip-text text-transparent">
-            Study Groups
-          </h1>
-          <p className="text-muted-foreground mt-1">Find your perfect study squad! 🚀</p>
-        </div>
-        <Dialog open={isCreateDialogOpen} onOpenChange={setIsCreateDialogOpen}>
+    <div className="rounded-[36px] bg-white/60 shadow-[0_30px_80px_rgba(15,23,42,0.08)] p-6 h-[720px] overflow-y-auto">
+      <div className="space-y-6">
+        <div className="flex justify-end items-center">
+          <Dialog open={isCreateDialogOpen} onOpenChange={setIsCreateDialogOpen}>
           <DialogTrigger asChild>
             <Button className="bg-gradient-to-r from-purple-500 to-pink-500 hover:from-purple-600 hover:to-pink-600">
               <Plus className="size-4 mr-2" />
@@ -511,14 +506,14 @@ export function StudyGroupsPage({ accessToken, userId, currentUserUsername, room
         </Dialog>
       </div>
 
-      <div className="grid gap-6 md:grid-cols-2 lg:grid-cols-3">
-        {sortedGroups.length === 0 ? (
-          <Card className="col-span-full p-12 text-center bg-gradient-to-br from-gray-50 to-blue-50 border-dashed border-2">
-            <div className="text-6xl mb-4">👥</div>
-            <p className="text-muted-foreground text-lg">No study groups yet. Create the first one!</p>
-          </Card>
-        ) : (
-          sortedGroups.map((group, index) => {
+        <div className="grid gap-6 md:grid-cols-2 lg:grid-cols-3">
+          {sortedGroups.length === 0 ? (
+            <Card className="col-span-full p-12 text-center bg-gradient-to-br from-gray-50 to-blue-50 border-dashed border-2">
+              <div className="text-6xl mb-4">👥</div>
+              <p className="text-muted-foreground text-lg">No study groups yet. Create the first one!</p>
+            </Card>
+          ) : (
+            sortedGroups.map((group, index) => {
             const isHost = group.hostId === userId;
             const isMember = group.participants.includes(userId);
             const hasApplied = group.applicants.includes(userId);
@@ -526,11 +521,11 @@ export function StudyGroupsPage({ accessToken, userId, currentUserUsername, room
             const colorScheme = pastelColors[index % pastelColors.length];
             const icon = getSubjectIcon(group.topic);
 
-            return (
-              <Card 
-                key={group.id} 
-                className={`bg-gradient-to-br ${colorScheme.bg} ${colorScheme.border} border-2 overflow-hidden transition-all hover:shadow-lg hover:scale-105`}
-              >
+              return (
+                <Card 
+                  key={group.id} 
+                  className={`bg-gradient-to-br ${colorScheme.bg} ${colorScheme.border} border-2 overflow-hidden transition-all hover:shadow-lg hover:scale-105`}
+                >
                 <CardContent className="p-6 space-y-4">
                   {/* Header with icon and title */}
                   <div className="flex items-start justify-between">
@@ -678,9 +673,10 @@ export function StudyGroupsPage({ accessToken, userId, currentUserUsername, room
                   )}
                 </CardContent>
               </Card>
-            );
-          })
-        )}
+              );
+            })
+          )}
+        </div>
       </div>
     </div>
   );

@@ -69,10 +69,10 @@ export function FriendsPage({ accessToken, onViewFriend }: FriendsPageProps) {
   };
 
   return (
-    <div className="space-y-6">
-      <div className="flex justify-between items-center">
-        <h1 className="text-3xl font-bold">Friends</h1>
-        <Dialog open={isAddDialogOpen} onOpenChange={setIsAddDialogOpen}>
+    <div className="rounded-[36px] bg-white/60 shadow-[0_30px_80px_rgba(15,23,42,0.08)] p-6 h-[720px] overflow-y-auto">
+      <div className="space-y-6">
+        <div className="flex justify-end items-center">
+          <Dialog open={isAddDialogOpen} onOpenChange={setIsAddDialogOpen}>
           <DialogTrigger asChild>
             <Button>
               <UserPlus className="size-4 mr-2" />
@@ -101,31 +101,32 @@ export function FriendsPage({ accessToken, onViewFriend }: FriendsPageProps) {
         </Dialog>
       </div>
 
-      {friends.length === 0 ? (
-        <Card className="p-12 text-center">
-          <p className="text-muted-foreground">No friends yet. Add your first friend to get started!</p>
-        </Card>
-      ) : (
-        <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-3">
-          {friends.map((friend) => (
-            <Card
-              key={friend.id}
-              className="cursor-pointer hover:shadow-md transition-shadow"
-              onClick={() => onViewFriend(friend)}
-            >
-              <CardHeader>
-                <CardTitle className="text-lg">{friend.username}</CardTitle>
-                <p className="text-sm text-muted-foreground">{friend.email}</p>
-              </CardHeader>
-              <CardContent>
-                <p className="text-sm">
-                  <span className="font-medium">Major:</span> {friend.category}
-                </p>
-              </CardContent>
-            </Card>
-          ))}
-        </div>
-      )}
+        {friends.length === 0 ? (
+          <Card className="p-12 text-center">
+            <p className="text-muted-foreground">No friends yet. Add your first friend to get started!</p>
+          </Card>
+        ) : (
+          <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-3">
+            {friends.map((friend) => (
+              <Card
+                key={friend.id}
+                className="cursor-pointer hover:shadow-md transition-shadow"
+                onClick={() => onViewFriend(friend)}
+              >
+                <CardHeader>
+                  <CardTitle className="text-lg">{friend.username}</CardTitle>
+                  <p className="text-sm text-muted-foreground">{friend.email}</p>
+                </CardHeader>
+                <CardContent>
+                  <p className="text-sm">
+                    <span className="font-medium">Major:</span> {friend.category}
+                  </p>
+                </CardContent>
+              </Card>
+            ))}
+          </div>
+        )}
+      </div>
     </div>
   );
 }

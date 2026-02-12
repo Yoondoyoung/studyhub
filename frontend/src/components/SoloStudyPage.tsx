@@ -65,6 +65,7 @@ export function SoloStudyPage({ initialSessionId, onSessionsChange }: SoloStudyP
   const [isUploading, setIsUploading] = useState(false);
   const [isRecording, setIsRecording] = useState(false);
   const [isProcessingVoice, setIsProcessingVoice] = useState(false);
+  const [isDragActive, setIsDragActive] = useState(false);
   const [quizData, setQuizData] = useState<QuizData | null>(null);
   const [currentQuestionIndex, setCurrentQuestionIndex] = useState(0);
   const [selectedAnswer, setSelectedAnswer] = useState<number | null>(null);
@@ -82,6 +83,7 @@ export function SoloStudyPage({ initialSessionId, onSessionsChange }: SoloStudyP
   
   const mediaRecorderRef = useRef<MediaRecorder | null>(null);
   const audioChunksRef = useRef<Blob[]>([]);
+  const fileInputRef = useRef<HTMLInputElement | null>(null);
 
   // Load session on mount (but don't auto-create)
   useEffect(() => {
@@ -351,10 +353,7 @@ export function SoloStudyPage({ initialSessionId, onSessionsChange }: SoloStudyP
     }
   };
 
-  const handleFileUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0];
-    if (!file) return;
-
+  const handleFileSelection = async (file: File) => {
     if (uploadedFiles.length >= 3) {
       toast.error('Maximum 3 files per session');
       return;
@@ -403,9 +402,14 @@ export function SoloStudyPage({ initialSessionId, onSessionsChange }: SoloStudyP
       toast.error(error instanceof Error ? error.message : 'Failed to upload file');
     } finally {
       setIsUploading(false);
-      // Clear the file input
-      e.target.value = '';
     }
+  };
+
+  const handleFileUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    await handleFileSelection(file);
+    e.target.value = '';
   };
 
   const handleFileDelete = async (fileId: string) => {
@@ -623,197 +627,45 @@ export function SoloStudyPage({ initialSessionId, onSessionsChange }: SoloStudyP
   };
 
   return (
-    <div className="space-y-6">
-      <div className="flex justify-between items-center">
-        <h1 className="text-3xl font-bold">AI Study Assistant</h1>
-        <div className="flex items-center gap-2">
-          <Button 
-            variant="outline" 
-            onClick={createNewSession}
-            disabled={isLoading || isUploading}
-          >
-            <Plus className="size-4 mr-2" />
-            New Study
-          </Button>
-        </div>
-      </div>
+    <>
+      <div className="grid grid-cols-1 xl:grid-cols-12 gap-6 items-stretch">
+      <div className="xl:col-span-8">
+        <div className="rounded-[36px] bg-white/60 shadow-[0_30px_80px_rgba(15,23,42,0.08)] p-6 h-[720px] overflow-y-auto">
+          <div>
+          <Tabs value={mode} onValueChange={(v) => setMode(v as 'teach' | 'student')}>
 
-      {/* Current Session Info */}
-      {currentSession && (
-        <Card className="bg-blue-50 border-blue-200">
-          <CardContent className="py-3 px-4">
-            <div className="flex justify-between items-center">
-              <p className="text-sm font-medium">
-                Current Session: {currentSession.name}
-              </p>
-              <p className="text-xs text-muted-foreground">
-                {uploadedFiles.length}/3 files
-              </p>
-            </div>
-          </CardContent>
-        </Card>
-      )}
+        <TabsContent value="student" className="space-y-4" />
 
-      {/* File Upload Area */}
-      <Card>
-        <CardHeader>
-          <div className="flex justify-between items-center">
-            <CardTitle className="text-lg">Study Materials ({uploadedFiles.length}/3)</CardTitle>
-            <label htmlFor="file-upload">
-              <Button 
-                variant="outline" 
-                size="sm" 
-                asChild 
-                disabled={isUploading || uploadedFiles.length >= 3}
-              >
-                <span className="cursor-pointer">
-                  {isUploading ? (
-                    <>
-                      <Loader2 className="size-4 mr-2 animate-spin" />
-                      Uploading...
-                    </>
-                  ) : (
-                    <>
-                      <Upload className="size-4 mr-2" />
-                      Upload File
-                    </>
-                  )}
-                </span>
-              </Button>
-            </label>
-            <input
-              id="file-upload"
-              type="file"
-              accept=".pdf,.txt,.md,.png,.jpg,.jpeg,.gif,.webp,.mp3,.wav,.m4a,.mp4,.webm,text/plain,application/pdf,image/*,audio/*"
-              className="hidden"
-              onChange={handleFileUpload}
-              disabled={isUploading || uploadedFiles.length >= 3}
-            />
-          </div>
-        </CardHeader>
-        <CardContent>
-          {uploadedFiles.length === 0 ? (
-            <div className="text-center py-8 text-muted-foreground">
-              <FileText className="size-12 mx-auto mb-2 opacity-50" />
-              <p className="text-sm">No files uploaded yet. Upload up to 3 files to get started!</p>
-            </div>
-          ) : (
-            <div className="space-y-2">
-              {uploadedFiles.map((file) => (
-                <div
-                  key={file.id}
-                  className="flex items-center justify-between p-3 bg-gray-50 rounded-lg border"
-                >
-                  <div className="flex items-center gap-2">
-                    <FileText className="size-4 text-blue-600" />
-                    <span className="text-sm font-medium">{file.fileName}</span>
-                    <span className="text-xs text-muted-foreground">({file.fileType})</span>
-                  </div>
-                  <Button
-                    variant="ghost"
-                    size="sm"
-                    onClick={() => handleFileDelete(file.id)}
-                    className="hover:bg-red-100 hover:text-red-600"
-                  >
-                    <X className="size-4" />
-                  </Button>
-                </div>
-              ))}
-            </div>
-          )}
-        </CardContent>
-      </Card>
-
-      <Tabs value={mode} onValueChange={(v) => setMode(v as 'teach' | 'student')}>
-        <TabsList className="grid w-full grid-cols-2">
-          <TabsTrigger value="student">
-            <BookOpen className="size-4 mr-2" />
-            Student Mode
-          </TabsTrigger>
-          <TabsTrigger value="teach">
-            <GraduationCap className="size-4 mr-2" />
-            Teach Mode
-          </TabsTrigger>
-        </TabsList>
-
-        <TabsContent value="student" className="space-y-4">
-          <Card>
-            <CardHeader>
-              <CardTitle className="text-lg">AI Teaches You</CardTitle>
-              <p className="text-sm text-muted-foreground">
-                The AI will explain concepts and quiz you on the material
-              </p>
-            </CardHeader>
-          </Card>
-        </TabsContent>
-
-        <TabsContent value="teach" className="space-y-4">
-          <Card>
-            <CardHeader>
-              <CardTitle className="text-lg">You Teach the AI</CardTitle>
-              <p className="text-sm text-muted-foreground">
-                {teachPhase === 'teaching' 
-                  ? 'Explain the concept to the AI and receive feedback on your understanding'
-                  : 'Answer the AI\'s questions to test your knowledge'}
-              </p>
-            </CardHeader>
-            <CardContent>
-              <div className="flex gap-2">
-                <Button
-                  variant={teachPhase === 'teaching' ? 'default' : 'outline'}
-                  size="sm"
-                  onClick={() => setTeachPhase('teaching')}
-                  className="flex-1"
-                >
-                  <GraduationCap className="size-4 mr-2" />
-                  Teaching Phase
-                </Button>
-                <Button
-                  variant={teachPhase === 'quiz' ? 'default' : 'outline'}
-                  size="sm"
-                  onClick={() => {
-                    if (teachPhase !== 'quiz') {
-                      // If quiz already exists, just switch to quiz phase
-                      if (quizData && quizData.questions && quizData.questions.length > 0) {
-                        setTeachPhase('quiz');
-                      } else {
-                        // Otherwise, show settings to create new quiz
-                        setShowQuizSettings(true);
-                      }
-                    }
-                  }}
-                  className="flex-1"
-                >
-                  <BookOpen className="size-4 mr-2" />
-                  Quiz Phase
-                </Button>
-              </div>
-              <div className="mt-3 p-3 bg-blue-50 rounded-lg">
-                <p className="text-xs text-blue-900">
-                  {teachPhase === 'teaching' ? (
-                    <>
-                      <strong>Teaching Phase:</strong> Explain the concepts from your uploaded materials. 
-                      The AI will evaluate your understanding with a score (0-10) and provide detailed feedback. 
-                      Keep explaining until you reach 9-10/10!
-                    </>
-                  ) : (
-                    <>
-                      <strong>Quiz Phase:</strong> The AI will ask you questions based on your materials. 
-                      Answer them to test your knowledge. The AI will tell you if you're correct or not.
-                    </>
-                  )}
-                </p>
-              </div>
-            </CardContent>
-          </Card>
-        </TabsContent>
+        <TabsContent value="teach" className="space-y-4" />
       </Tabs>
 
-      <Card className="min-h-[400px] flex flex-col">
-        <CardHeader>
-          <div className="flex justify-between items-center">
-            <CardTitle>{mode === 'teach' && teachPhase === 'quiz' ? 'Quiz' : 'Chat'}</CardTitle>
-            {mode === 'teach' && teachPhase === 'quiz' && quizData && !showQuizResult && (
+      <Card className="h-[670px] flex flex-col rounded-3xl bg-white/90 shadow-[0_20px_60px_rgba(15,23,42,0.08)] border-0 overflow-hidden">
+        <CardHeader className="pt-3 pb-2">
+          <div className="flex items-start pt-4 justify-between gap-4">
+            <CardTitle className="min-w-[120px]">
+              {mode === 'teach' && teachPhase === 'quiz' ? 'Quiz' : 'Chat'}
+            </CardTitle>
+            <div className="flex-1 text-center">
+              {currentSession && (
+                <p className="text-xs text-gray-500">
+                  {currentSession.name}
+                </p>
+              )}
+            </div>
+            <div className="flex items-center gap-2">
+              <Button 
+                variant="outline" 
+                size="sm"
+                onClick={createNewSession}
+                disabled={isLoading || isUploading}
+              >
+                <Plus className="size-4 mr-2" />
+                New Study
+              </Button>
+            </div>
+          </div>
+          {mode === 'teach' && teachPhase === 'quiz' && quizData && !showQuizResult && (
+            <div className="mt-2 flex justify-end">
               <Button
                 variant="outline"
                 size="sm"
@@ -822,10 +674,10 @@ export function SoloStudyPage({ initialSessionId, onSessionsChange }: SoloStudyP
               >
                 🔄 New Quiz
               </Button>
-            )}
-          </div>
+            </div>
+          )}
         </CardHeader>
-        <CardContent className="flex-1 flex flex-col">
+        <CardContent className="flex-1 min-h-0 flex flex-col pt-0">
           {/* Quiz UI - only show in Quiz Phase */}
           {mode === 'teach' && teachPhase === 'quiz' ? (
             <div className="flex-1 flex flex-col">
@@ -1116,7 +968,7 @@ export function SoloStudyPage({ initialSessionId, onSessionsChange }: SoloStudyP
                       className={`flex ${msg.role === 'user' ? 'justify-end' : 'justify-start'}`}
                     >
                       <div
-                        className={`max-w-[80%] rounded-lg px-4 py-2 ${
+                        className={`max-w-[80%] rounded-2xl px-4 py-3 leading-relaxed ${
                           msg.role === 'user'
                             ? 'bg-blue-600 text-white'
                             : 'bg-gray-100 text-gray-900'
@@ -1129,7 +981,7 @@ export function SoloStudyPage({ initialSessionId, onSessionsChange }: SoloStudyP
                 )}
                 {isLoading && (
                   <div className="flex justify-start">
-                    <div className="max-w-[80%] rounded-lg px-4 py-2 bg-gray-100 text-gray-900">
+                    <div className="max-w-[80%] rounded-2xl px-4 py-3 bg-gray-100 text-gray-900 leading-relaxed">
                       <div className="flex items-center gap-2">
                         <Loader2 className="size-4 animate-spin" />
                         <p className="text-sm">AI is thinking...</p>
@@ -1139,12 +991,12 @@ export function SoloStudyPage({ initialSessionId, onSessionsChange }: SoloStudyP
                 )}
               </div>
 
-              <div className="flex gap-2">
+              <div className="rounded-[20px] border border-gray-200 bg-white/80 p-4 shadow-sm">
                 <Textarea
                   placeholder={
                     mode === 'teach'
                       ? "Explain the concept in your own words..."
-                      : "Ask a question about your study material..."
+                      : "What do you want to know?"
                   }
                   value={input}
                   onChange={(e) => setInput(e.target.value)}
@@ -1154,73 +1006,174 @@ export function SoloStudyPage({ initialSessionId, onSessionsChange }: SoloStudyP
                       handleSendMessage();
                     }
                   }}
-                  className="flex-1"
+                  className="min-h-[72px] resize-none border-0 bg-transparent p-0 pt-1 leading-relaxed shadow-none focus-visible:ring-0"
                   rows={3}
                   disabled={isRecording || isProcessingVoice}
                 />
-                <div className="flex flex-col gap-2 self-end">
-                  <Button 
-                    onClick={handleSendMessage} 
-                    disabled={isLoading || !input.trim() || isRecording || isProcessingVoice}
-                  >
-                    {isLoading ? (
-                      <>
-                        <Loader2 className="size-4 mr-2 animate-spin" />
-                        Sending...
-                      </>
-                    ) : (
-                      'Send'
-                    )}
-                  </Button>
+                <div className="mt-3 flex items-center justify-between">
                   <Button 
                     onClick={handleVoiceClick}
                     variant={isRecording ? "destructive" : "outline"}
+                    size="sm"
+                    className="gap-2"
                     disabled={isLoading || isProcessingVoice}
                   >
                     {isProcessingVoice ? (
                       <>
-                        <Loader2 className="size-4 mr-2 animate-spin" />
+                        <Loader2 className="size-4 animate-spin" />
                         Processing...
                       </>
                     ) : isRecording ? (
                       <>
-                        <MicOff className="size-4 mr-2" />
+                        <MicOff className="size-4" />
                         Stop
                       </>
                     ) : (
                       <>
-                        <Mic className="size-4 mr-2" />
+                        <Mic className="size-4" />
                         Voice
                       </>
                     )}
                   </Button>
+                  <Button 
+                    onClick={handleSendMessage} 
+                    disabled={isLoading || !input.trim() || isRecording || isProcessingVoice}
+                    className="rounded-full h-11 w-11 p-0"
+                  >
+                    {isLoading ? (
+                      <Loader2 className="size-4 animate-spin" />
+                    ) : (
+                      '↑'
+                    )}
+                  </Button>
                 </div>
+              </div>
+              <div className="mt-3 flex flex-wrap gap-2">
+                <Button
+                  variant={mode === 'student' ? 'default' : 'outline'}
+                  size="sm"
+                  className="rounded-full"
+                  onClick={() => setMode('student')}
+                >
+                  <BookOpen className="size-4 mr-2" />
+                  Student Mode
+                </Button>
+                <Button
+                  variant={mode === 'teach' ? 'default' : 'outline'}
+                  size="sm"
+                  className="rounded-full"
+                  onClick={() => setMode('teach')}
+                >
+                  <GraduationCap className="size-4 mr-2" />
+                  Teach Mode
+                </Button>
+                <Button
+                  variant="outline"
+                  size="sm"
+                  className="rounded-full"
+                  onClick={() => {
+                    setMode('teach');
+                    setTeachPhase('teaching');
+                    setShowQuizSettings(true);
+                  }}
+                  disabled={isGeneratingQuiz}
+                >
+                  <BookOpen className="size-4 mr-2" />
+                  Create Quiz
+                </Button>
               </div>
             </>
           )}
         </CardContent>
       </Card>
+          </div>
+        </div>
+      </div>
 
-      <Card className="bg-blue-50 border-blue-200">
-        <CardContent className="py-3 px-4">
-          <p className="text-sm text-blue-900">
-            <strong>💡 Tip:</strong> Upload your study materials (PDF, TXT, Images, Audio) and the AI will help you learn!
-            <br />
-            • <strong>Student Mode:</strong> Ask questions and get explanations
-            <br />
-            • <strong>Teach Mode - Teaching Phase:</strong> Explain concepts and get scored (0-10). Aim for 9-10!
-            <br />
-            • <strong>Teach Mode - Quiz Phase:</strong> Answer AI's questions to test your knowledge
-            <br />
-            Use the <strong>Voice</strong> button to speak instead of typing!
-          </p>
-        </CardContent>
-      </Card>
+      <div className="xl:col-span-4">
+        <div className="rounded-[36px] bg-white/60 shadow-[0_30px_80px_rgba(15,23,42,0.08)] p-6 h-[720px] overflow-y-auto">
+          <div className="space-y-6">
+          {/* File Upload Area */}
+          <Card
+            className={`rounded-3xl bg-white/90 shadow-[0_20px_60px_rgba(15,23,42,0.08)] border-2 ${
+              isDragActive ? 'border-purple-300 bg-white' : 'border-transparent'
+            }`}
+            onClick={() => fileInputRef.current?.click()}
+            onDragOver={(event) => {
+              event.preventDefault();
+              setIsDragActive(true);
+            }}
+            onDragLeave={() => setIsDragActive(false)}
+            onDrop={(event) => {
+              event.preventDefault();
+              setIsDragActive(false);
+              const file = event.dataTransfer.files?.[0];
+              if (file) handleFileSelection(file);
+            }}
+            role="button"
+            tabIndex={0}
+            onKeyDown={(event) => {
+              if (event.key === 'Enter' || event.key === ' ') {
+                event.preventDefault();
+                fileInputRef.current?.click();
+              }
+            }}
+          >
+            <CardHeader>
+              <div className="flex justify-between items-center">
+                <CardTitle className="text-lg">Study Materials ({uploadedFiles.length}/3)</CardTitle>
+                <input
+                  id="file-upload"
+                  type="file"
+                  accept=".pdf,.txt,.md,.png,.jpg,.jpeg,.gif,.webp,.mp3,.wav,.m4a,.mp4,.webm,text/plain,application/pdf,image/*,audio/*"
+                  className="hidden"
+                  onChange={handleFileUpload}
+                  disabled={isUploading || uploadedFiles.length >= 3}
+                  ref={fileInputRef}
+                />
+              </div>
+            </CardHeader>
+            <CardContent>
+              {uploadedFiles.length === 0 ? (
+                <div className="text-center py-8 text-muted-foreground">
+                  <FileText className="size-12 mx-auto mb-2 opacity-50" />
+                  <p className="text-sm">Drag & drop files here or click to upload (max 3).</p>
+                </div>
+              ) : (
+                <div className="space-y-2">
+                  {uploadedFiles.map((file) => (
+                    <div
+                      key={file.id}
+                      className="flex items-center justify-between p-3 bg-white/80 rounded-2xl border border-white/70"
+                    >
+                      <div className="flex items-center gap-2">
+                        <FileText className="size-4 text-blue-600" />
+                        <span className="text-sm font-medium">{file.fileName}</span>
+                        <span className="text-xs text-muted-foreground">({file.fileType})</span>
+                      </div>
+                      <Button
+                        variant="ghost"
+                        size="sm"
+                        onClick={() => handleFileDelete(file.id)}
+                        className="hover:bg-red-100 hover:text-red-600"
+                      >
+                        <X className="size-4" />
+                      </Button>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </CardContent>
+          </Card>
+          </div>
+        </div>
+      </div>
+    </div>
 
-      {/* Quiz Settings Popup */}
+    {/* Quiz Settings Popup */}
       {showQuizSettings && (
         <div className="fixed inset-0 bg-black/50 backdrop-blur-sm flex items-center justify-center z-50">
-          <Card className="w-full max-w-md mx-4">
+          <Card className="w-full max-w-md mx-4 rounded-3xl bg-white/95 shadow-[0_20px_60px_rgba(15,23,42,0.2)] border-0">
             <CardHeader>
               <CardTitle className="text-2xl">Generate Quiz</CardTitle>
               <p className="text-sm text-muted-foreground">
@@ -1314,6 +1267,6 @@ export function SoloStudyPage({ initialSessionId, onSessionsChange }: SoloStudyP
           </Card>
         </div>
       )}
-    </div>
+    </>
   );
 }
