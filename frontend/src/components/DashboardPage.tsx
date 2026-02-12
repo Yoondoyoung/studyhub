@@ -94,7 +94,7 @@ export function DashboardPage({ accessToken, userName, currentUserId }: Dashboar
   const chatPanelOpenRef = useRef(false);
   const chatScrollRef = useRef<HTMLDivElement | null>(null);
   const chatAutoScrollRef = useRef(true);
-  
+
   const [newTodo, setNewTodo] = useState({
     name: '',
     subject: '',
