@@ -18,7 +18,9 @@ import {
   UserCircle, 
   Settings, 
   LogOut,
-  GraduationCap 
+  GraduationCap,
+  MoreVertical,
+  Trash2
 } from 'lucide-react';
 import { toast } from 'sonner';
 
@@ -56,6 +58,14 @@ interface Friend {
   profileImageUrl?: string;
 }
 
+interface StudySession {
+  id: string;
+  name: string;
+  fileCount: number;
+  messageCount: number;
+  updatedAt: string;
+}
+
 export default function App() {
   const [currentPage, setCurrentPage] = useState<Page>('login');
   const [accessToken, setAccessToken] = useState<string | null>(null);
@@ -64,6 +74,10 @@ export default function App() {
   const [selectedFriend, setSelectedFriend] = useState<Friend | null>(null);
   const [sessionChecked, setSessionChecked] = useState(false);
   const [currentGroupId, setCurrentGroupId] = useState<string | null>(null);
+  const [aiStudySessions, setAiStudySessions] = useState<StudySession[]>([]);
+  const [showAiStudyDropdown, setShowAiStudyDropdown] = useState(false);
+  const [selectedSessionId, setSelectedSessionId] = useState<string | null>(null);
+  const [deletingSessionId, setDeletingSessionId] = useState<string | null>(null);
   const [roomUserIsIn, setRoomUserIsIn] = useState<string | null>(null);
 
   useEffect(() => {
@@ -216,6 +230,79 @@ export default function App() {
       .toUpperCase();
   };
 
+  const loadAiStudySessions = async () => {
+    try {
+      if (!accessToken) return;
+      const response = await fetch(`${apiBase}/ai/sessions`, {
+        headers: { Authorization: `Bearer ${accessToken}` }
+      });
+      if (response.ok) {
+        const data = await response.json();
+        setAiStudySessions(data.sessions || []);
+      }
+    } catch (error) {
+      console.error('Failed to load AI study sessions:', error);
+    }
+  };
+
+  const handleAiStudyClick = () => {
+    setSelectedSessionId(null); // null means create new session
+    navigateTo('solo-study');
+  };
+
+  const handleSessionSelect = (sessionId: string) => {
+    setSelectedSessionId(sessionId);
+    setShowAiStudyDropdown(false);
+    navigateTo('solo-study');
+  };
+
+  const handleDeleteSession = async (sessionId: string, e: React.MouseEvent) => {
+    e.stopPropagation();
+    
+    if (!confirm('Are you sure you want to delete this study session?')) {
+      return;
+    }
+
+    setDeletingSessionId(sessionId);
+
+    try {
+      const response = await fetch(`${apiBase}/ai/sessions/${sessionId}`, {
+        method: 'DELETE',
+        headers: { Authorization: `Bearer ${accessToken}` }
+      });
+
+      if (response.ok) {
+        toast.success('Session deleted successfully');
+        await loadAiStudySessions();
+        
+        // If we're currently viewing the deleted session, go back to new session
+        if (selectedSessionId === sessionId) {
+          setSelectedSessionId(null);
+          if (currentPage === 'solo-study') {
+            // Trigger reload by navigating away and back
+            setCurrentPage('dashboard');
+            setTimeout(() => navigateTo('solo-study'), 50);
+          }
+        }
+      } else {
+        const data = await response.json();
+        toast.error(data.error || 'Failed to delete session');
+      }
+    } catch (error) {
+      console.error('Failed to delete session:', error);
+      toast.error('Failed to delete session');
+    } finally {
+      setDeletingSessionId(null);
+    }
+  };
+
+  // Load AI study sessions when user is logged in
+  useEffect(() => {
+    if (accessToken) {
+      loadAiStudySessions();
+    }
+  }, [accessToken]);
+
   if (!sessionChecked) {
     return (
       <div className="min-h-screen flex items-center justify-center bg-[#f5f5f7]">
@@ -278,6 +365,71 @@ export default function App() {
           >
             <Users className="size-5" />
           </button>
+          
+          <div>
+            <button
+              onMouseEnter={() => {
+                setShowAiStudyDropdown(true);
+                loadAiStudySessions();
+              }}
+              onClick={handleAiStudyClick}
+              className={`w-full flex items-center gap-3 px-3 py-2.5 rounded-lg transition-all text-sm ${
+                currentPage === 'solo-study'
+                  ? 'bg-gray-100 text-gray-900'
+                  : 'text-gray-600 hover:bg-gray-50 hover:text-gray-900'
+              }`}
+            >
+              <BookOpen className="size-4" />
+              <span className="font-medium">AI Study</span>
+            </button>
+
+            {/* Expanded session list with animation */}
+            {showAiStudyDropdown && aiStudySessions.length > 0 && (
+              <div 
+                className="pl-6 space-y-0.5 mt-1 overflow-hidden"
+                onMouseLeave={() => setShowAiStudyDropdown(false)}
+                style={{
+                  animation: 'slideDown 0.2s ease-out'
+                }}
+              >
+                {aiStudySessions.map((session, index) => (
+                  <div
+                    key={session.id}
+                    className="relative group"
+                    style={{ 
+                      animation: `fadeInSlide 0.3s ease-out ${index * 0.05}s forwards`,
+                      opacity: 0
+                    }}
+                  >
+                    <button
+                      onClick={() => handleSessionSelect(session.id)}
+                      className="w-full text-left px-3 py-2 pr-8 rounded-md hover:bg-gray-50 transition-all duration-150 text-xs"
+                    >
+                      <p className="font-medium text-gray-700 truncate">
+                        {session.name.replace('Study Session - ', '')}
+                      </p>
+                      <p className="text-gray-500 mt-0.5">
+                        {session.fileCount}f • {session.messageCount}m
+                      </p>
+                    </button>
+                    <button
+                      onClick={(e) => handleDeleteSession(session.id, e)}
+                      disabled={deletingSessionId === session.id}
+                      className="absolute right-2 top-1/2 -translate-y-1/2 p-1 rounded hover:bg-red-100 opacity-0 group-hover:opacity-100 transition-opacity"
+                      title="Delete session"
+                    >
+                      {deletingSessionId === session.id ? (
+                        <div className="size-3.5 border-2 border-red-500 border-t-transparent rounded-full animate-spin" />
+                      ) : (
+                        <Trash2 className="size-3.5 text-red-600" />
+                      )}
+                    </button>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+          
 
           <button
             onClick={() => navigateTo('solo-study')}
@@ -365,7 +517,12 @@ export default function App() {
               onLeaveRoom={() => setRoomUserIsIn(null)}
             />
           )}
-          {currentPage === 'solo-study' && <SoloStudyPage />}
+          {currentPage === 'solo-study' && (
+            <SoloStudyPage 
+              initialSessionId={selectedSessionId}
+              onSessionsChange={loadAiStudySessions}
+            />
+          )}
           {currentPage === 'friends' && (
             <FriendsPage
               accessToken={accessToken}
