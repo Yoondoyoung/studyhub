@@ -11,7 +11,6 @@ import { SettingsPage } from './components/SettingsPage';
 import { ProfilePage } from './components/ProfilePage';
 import { StudyRoomPage } from './components/StudyRoomPage';
 import { Toaster } from './components/ui/sonner';
-import { Avatar, AvatarFallback, AvatarImage } from './components/ui/avatar';
 import { 
   LayoutDashboard, 
   Users, 
@@ -248,132 +247,106 @@ export default function App() {
   }
 
   return (
-    <div className="min-h-screen bg-[#f5f5f7] flex">
+    <div className="min-h-screen bg-gradient-to-br from-[#eaf5ff] via-[#f7f9ff] to-[#fde9f1] flex">
       {/* Sidebar */}
-      <aside className="w-56 bg-white flex flex-col fixed h-full shadow-sm">
-        {/* Logo */}
-        <div className="p-6">
-          <div className="flex items-center gap-2">
-            <GraduationCap className="size-6 text-teal-600" />
-            <span className="text-lg font-bold tracking-tight text-gray-900">STUDYHUB</span>
-          </div>
+      <aside className="fixed left-6 top-6 bottom-6 w-20 bg-white/90 backdrop-blur rounded-[32px] shadow-xl flex flex-col items-center py-8">
+        <div className="size-12 rounded-2xl bg-[#e9f6ff] flex items-center justify-center">
+          <GraduationCap className="size-6 text-gray-800" />
         </div>
 
-        {/* Navigation */}
-        <nav className="flex-1 px-4 space-y-1">
+        <nav className="mt-10 flex flex-col items-center gap-5 flex-1">
           <button
             onClick={() => navigateTo('dashboard')}
-            className={`w-full flex items-center gap-3 px-3 py-2.5 rounded-lg transition-all text-sm ${
+            className={`size-12 rounded-full flex items-center justify-center transition-colors ${
               currentPage === 'dashboard'
-                ? 'bg-gray-100 text-gray-900'
-                : 'text-gray-600 hover:bg-gray-50 hover:text-gray-900'
+                ? 'bg-black text-white shadow-md'
+                : 'bg-white text-gray-600 hover:bg-gray-100'
             }`}
+            title="Home"
           >
-            <LayoutDashboard className="size-4" />
-            <span className="font-medium">Overview</span>
+            <LayoutDashboard className="size-5" />
           </button>
-          
+
           <button
             onClick={() => navigateTo('study-groups')}
-            className={`w-full flex items-center gap-3 px-3 py-2.5 rounded-lg transition-all text-sm ${
+            className={`size-12 rounded-full flex items-center justify-center transition-colors ${
               currentPage === 'study-groups'
-                ? 'bg-gray-100 text-gray-900'
-                : 'text-gray-600 hover:bg-gray-50 hover:text-gray-900'
+                ? 'bg-black text-white shadow-md'
+                : 'bg-white text-gray-600 hover:bg-gray-100'
             }`}
+            title="Study groups"
           >
-            <Users className="size-4" />
-            <span className="font-medium">Study Groups</span>
+            <Users className="size-5" />
           </button>
-          
+
           <button
             onClick={() => navigateTo('solo-study')}
-            className={`w-full flex items-center gap-3 px-3 py-2.5 rounded-lg transition-all text-sm ${
+            className={`size-12 rounded-full flex items-center justify-center transition-colors ${
               currentPage === 'solo-study'
-                ? 'bg-gray-100 text-gray-900'
-                : 'text-gray-600 hover:bg-gray-50 hover:text-gray-900'
+                ? 'bg-black text-white shadow-md'
+                : 'bg-white text-gray-600 hover:bg-gray-100'
             }`}
+            title="AI study"
           >
-            <BookOpen className="size-4" />
-            <span className="font-medium">AI Study</span>
+            <BookOpen className="size-5" />
           </button>
-          
+
           <button
             onClick={() => navigateTo('friends')}
-            className={`w-full flex items-center gap-3 px-3 py-2.5 rounded-lg transition-all text-sm ${
+            className={`size-12 rounded-full flex items-center justify-center transition-colors ${
               currentPage === 'friends'
-                ? 'bg-gray-100 text-gray-900'
-                : 'text-gray-600 hover:bg-gray-50 hover:text-gray-900'
+                ? 'bg-black text-white shadow-md'
+                : 'bg-white text-gray-600 hover:bg-gray-100'
             }`}
+            title="Friends"
           >
-            <UserCircle className="size-4" />
-            <span className="font-medium">Friends</span>
+            <UserCircle className="size-5" />
           </button>
         </nav>
 
-        {/* Bottom Section */}
-        <div className="px-4 pb-4 space-y-1">
+        <div className="flex flex-col items-center gap-4">
+          <button
+            onClick={() => setCurrentPage('profile')}
+            className="size-12 rounded-full bg-white text-gray-600 hover:bg-gray-100 flex items-center justify-center"
+            title="Profile"
+          >
+            <UserCircle className="size-5" />
+          </button>
           <button
             onClick={() => navigateTo('settings')}
-            className={`w-full flex items-center gap-3 px-3 py-2.5 rounded-lg transition-all text-sm ${
+            className={`size-10 rounded-full flex items-center justify-center transition-colors ${
               currentPage === 'settings'
-                ? 'bg-gray-100 text-gray-900'
-                : 'text-gray-600 hover:bg-gray-50 hover:text-gray-900'
+                ? 'bg-black text-white'
+                : 'bg-white text-gray-500 hover:bg-gray-100'
             }`}
+            title="Settings"
           >
             <Settings className="size-4" />
-            <span className="font-medium">Settings</span>
           </button>
-          <button onClick={handleLogout} className="w-full flex items-center gap-3 px-3 py-2.5 rounded-lg text-sm text-gray-500 hover:bg-gray-50">
+          <button
+            onClick={handleLogout}
+            className="size-10 rounded-full flex items-center justify-center bg-white text-gray-400 hover:bg-gray-100"
+            title="Log out"
+          >
             <LogOut className="size-4" />
-            <span>Log out</span>
           </button>
         </div>
       </aside>
 
       {/* Main Content */}
-      <div className="flex-1 ml-56">
+      <div className="flex-1 pl-32 pr-8 py-8">
         {prototypeMode && (
-          <div className="bg-amber-500 text-white py-2 px-6 text-center text-xs font-medium">
+          <div className="bg-amber-500 text-white py-2 px-6 text-center text-xs font-medium rounded-full mb-4">
             🎨 PROTOTYPE MODE
           </div>
         )}
 
-        <div className="flex items-center justify-end px-6 pt-4">
-          <button
-            onClick={() => setCurrentPage('profile')}
-            className="flex items-center gap-2 text-sm text-gray-600 hover:text-gray-900"
-            title="View profile"
-          >
-            <Avatar className="size-9">
-              {user?.profileImageUrl && (
-                <AvatarImage
-                  src={user.profileImageUrl}
-                  alt={user.username || 'Profile'}
-                  className="object-cover"
-                  style={{ objectPosition: 'center' }}
-                />
-              )}
-              <AvatarFallback
-                className="bg-gray-200 text-gray-700 text-xs font-semibold"
-                style={
-                  user?.profileImageUrl
-                    ? {
-                        backgroundImage: `url(${user.profileImageUrl})`,
-                        backgroundSize: 'cover',
-                        backgroundPosition: 'center'
-                      }
-                    : undefined
-                }
-              >
-                {!user?.profileImageUrl ? getInitials(user?.username, user?.email) : null}
-              </AvatarFallback>
-            </Avatar>
-          </button>
-        </div>
-        
-        <main className="p-6">
+        <main className="max-w-6xl mx-auto">
           {currentPage === 'dashboard' && (
-            <DashboardPage accessToken={accessToken} />
+            <DashboardPage
+              accessToken={accessToken}
+              userName={user?.username || user?.email}
+            />
           )}
           {currentPage === 'study-groups' && (
             <StudyGroupsPage

@@ -2,12 +2,10 @@ import { useState, useEffect } from 'react';
 import { Button } from './ui/button';
 import { Input } from './ui/input';
 import { Label } from './ui/label';
-import { Card, CardContent, CardHeader, CardTitle } from './ui/card';
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger } from './ui/dialog';
-import { Clock, Plus, Trash2, Play, Pause, CheckCircle2, Flame, Trophy, Target, Sparkles, MessageCircle, MapPin, Users, TrendingUp, Calendar, Search, Bell, User as UserIcon, Pencil, Settings } from 'lucide-react';
+import { Plus, CheckCircle2, Pencil } from 'lucide-react';
 import { toast } from 'sonner';
 import { Avatar, AvatarFallback } from './ui/avatar';
-import { Badge } from './ui/badge';
 import { Switch } from './ui/switch';
 import { apiBase } from '../utils/api';
 
@@ -25,6 +23,7 @@ interface Todo {
 
 interface DashboardPageProps {
   accessToken: string;
+  userName?: string;
 }
 
 interface Friend {
@@ -44,7 +43,7 @@ interface StudyRoom {
   icon?: string;
 }
 
-export function DashboardPage({ accessToken }: DashboardPageProps) {
+export function DashboardPage({ accessToken, userName }: DashboardPageProps) {
   const TIMER_STORAGE_KEY = 'studyhub_active_timer';
   const [todos, setTodos] = useState<Todo[]>([]);
   const [dailyTotal, setDailyTotal] = useState(0);
@@ -67,6 +66,7 @@ export function DashboardPage({ accessToken }: DashboardPageProps) {
   const [friends, setFriends] = useState<Friend[]>([]);
   const [nearbyRooms, setNearbyRooms] = useState<StudyRoom[]>([]);
   const [studyStreak, setStudyStreak] = useState<{ day: string; completed: boolean }[]>([]);
+  const heatmapColumns = 52;
   
   const [newTodo, setNewTodo] = useState({
     name: '',
@@ -445,6 +445,13 @@ export function DashboardPage({ accessToken }: DashboardPageProps) {
     return `${String(hours).padStart(2, '0')}:${String(minutes).padStart(2, '0')}`;
   };
 
+  const formatGoalLabel = (seconds: number) => {
+    const safeSeconds = Math.max(0, Math.floor(seconds));
+    const hours = Math.floor(safeSeconds / 3600);
+    const minutes = Math.floor((safeSeconds % 3600) / 60);
+    return `${hours}:${String(minutes).padStart(2, '0')}h`;
+  };
+
   const parseGoalTime = (value: string) => {
     const trimmed = value.trim();
     const match = /^(\d{1,3}):([0-5]\d)$/.exec(trimmed);
@@ -582,294 +589,76 @@ export function DashboardPage({ accessToken }: DashboardPageProps) {
 
   return (
     <div className="space-y-6">
-      {/* Top Header */}
-      <div className="flex items-center justify-between">
-        <div></div>
-        <div className="flex items-center gap-3">
-          <button className="p-2 hover:bg-gray-100 rounded-lg transition-colors">
-            <Search className="size-5 text-gray-600" />
-          </button>
-          <button className="p-2 hover:bg-gray-100 rounded-lg transition-colors">
-            <Bell className="size-5 text-gray-600" />
-          </button>
-          <button className="p-2 hover:bg-gray-100 rounded-lg transition-colors">
-            <UserIcon className="size-5 text-gray-600" />
-          </button>
-        </div>
+      <div>
+        <h1 className="text-3xl font-semibold text-gray-900">Hi {userName || 'there'},</h1>
       </div>
 
-      <div className="grid grid-cols-1 lg:grid-cols-12 gap-6">
-        {/* Left Column - Main Content */}
-        <div className="lg:col-span-8 space-y-6">
-          {/* Total Study Time */}
-          <Card className="bg-white border-0 shadow-sm">
-            <CardContent className="p-6">
-              <div className="space-y-2">
-                <p className="text-sm text-gray-600 font-medium">Total study time</p>
-                <h1 className="text-5xl font-bold text-gray-900">{formatTime(dailyTotal)}</h1>
-                <div className="w-32 h-1 bg-teal-400 rounded-full mt-3"></div>
-              </div>
-            </CardContent>
-          </Card>
-
-          {/* Goal Cards */}
-          <div className="grid grid-cols-3 gap-4">
-            {/* Daily Goal */}
-            <Card className="bg-gradient-to-br from-[#ffc9d9] to-[#ffb3c6] border-0 shadow-sm">
-              <CardContent className="p-5">
-                <div className="space-y-4">
-                  <div className="flex items-center justify-between">
-                    <div>
-                      {(() => {
-                        const dailyPercent = getPercentage(dailyTotal, dailyGoal);
-                        return (
-                          <>
-                      <div className="flex items-center gap-2 mb-1">
-                        <p className="text-xs font-semibold text-gray-900">Daily Goal</p>
-                        <span className="text-[10px] font-semibold text-gray-700">
-                          {formatTime(dailyGoal)}
-                        </span>
-                      </div>
-                      <p className="text-sm font-bold text-gray-900">({Math.round(dailyPercent)}%)</p>
-                          </>
-                        );
-                      })()}
-                    </div>
-                    <Button
-                      size="icon"
-                      variant="ghost"
-                      className="size-8 text-gray-700 hover:bg-white/40"
-                      onClick={() => openGoalDialog('daily')}
-                    >
-                      <Settings className="size-4" />
-                    </Button>
-                  </div>
-                  <div className="relative w-20 h-20 mx-auto">
-                    {(() => {
-                      const dailyPercent = getPercentage(dailyTotal, dailyGoal);
-                      return (
-                    <svg className="transform -rotate-90 w-20 h-20">
-                      <circle
-                        cx="40"
-                        cy="40"
-                        r="32"
-                        stroke="#ffffff80"
-                        strokeWidth="6"
-                        fill="none"
-                      />
-                      <circle
-                        cx="40"
-                        cy="40"
-                        r="32"
-                        stroke="#000000"
-                        strokeWidth="6"
-                        fill="none"
-                        strokeDasharray={`${2 * Math.PI * 32}`}
-                        strokeDashoffset={`${2 * Math.PI * 32 * (1 - dailyPercent / 100)}`}
-                        strokeLinecap="round"
-                      />
-                    </svg>
-                      );
-                    })()}
-                    <div className="absolute inset-0 flex items-center justify-center">
-                      <span className="text-xl font-bold text-gray-900">
-                        {Math.round(getPercentage(dailyTotal, dailyGoal))}%
-                      </span>
-                    </div>
-                  </div>
-                </div>
-              </CardContent>
-            </Card>
-
-            {/* Weekly Goal */}
-            <Card className="bg-gradient-to-br from-[#ffeaa7] to-[#fdcb6e] border-0 shadow-sm">
-              <CardContent className="p-5">
-                <div className="space-y-4">
-                  <div className="flex items-center justify-between">
-                    <div>
-                      {(() => {
-                        const weeklyPercent = getPercentage(weeklyTotal, weeklyGoal);
-                        return (
-                          <>
-                      <div className="flex items-center gap-2 mb-1">
-                        <p className="text-xs font-semibold text-gray-900">Weekly Goal</p>
-                        <span className="text-[10px] font-semibold text-gray-700">
-                          {formatTime(weeklyGoal)}
-                        </span>
-                      </div>
-                      <p className="text-sm font-bold text-gray-900">({Math.round(weeklyPercent)}%)</p>
-                          </>
-                        );
-                      })()}
-                    </div>
-                    <Button
-                      size="icon"
-                      variant="ghost"
-                      className="size-8 text-gray-700 hover:bg-white/40"
-                      onClick={() => openGoalDialog('weekly')}
-                    >
-                      <Settings className="size-4" />
-                    </Button>
-                  </div>
-                  <div className="relative w-20 h-20 mx-auto">
-                    {(() => {
-                      const weeklyPercent = getPercentage(weeklyTotal, weeklyGoal);
-                      return (
-                    <svg className="transform -rotate-90 w-20 h-20">
-                      <circle
-                        cx="40"
-                        cy="40"
-                        r="32"
-                        stroke="#ffffff80"
-                        strokeWidth="6"
-                        fill="none"
-                      />
-                      <circle
-                        cx="40"
-                        cy="40"
-                        r="32"
-                        stroke="#000000"
-                        strokeWidth="6"
-                        fill="none"
-                        strokeDasharray={`${2 * Math.PI * 32}`}
-                        strokeDashoffset={`${2 * Math.PI * 32 * (1 - weeklyPercent / 100)}`}
-                        strokeLinecap="round"
-                      />
-                    </svg>
-                      );
-                    })()}
-                    <div className="absolute inset-0 flex items-center justify-center">
-                      <span className="text-xl font-bold text-gray-900">
-                        {Math.round(getPercentage(weeklyTotal, weeklyGoal))}%
-                      </span>
-                    </div>
-                  </div>
-                </div>
-              </CardContent>
-            </Card>
-
-            {/* Monthly Goal */}
-            <Card className="bg-gradient-to-br from-[#81ecec] to-[#00b894] border-0 shadow-sm">
-              <CardContent className="p-5">
-                <div className="space-y-4">
-                  <div className="flex items-center justify-between">
-                    <div>
-                      {(() => {
-                        const monthlyPercent = getPercentage(monthlyTotal, monthlyGoal);
-                        return (
-                          <>
-                      <div className="flex items-center gap-2 mb-1">
-                        <p className="text-xs font-semibold text-gray-900">Monthly Goal</p>
-                        <span className="text-[10px] font-semibold text-gray-700">
-                          {formatTime(monthlyGoal)}
-                        </span>
-                      </div>
-                      <p className="text-sm font-bold text-gray-900">({Math.round(monthlyPercent)}%)</p>
-                          </>
-                        );
-                      })()}
-                    </div>
-                    <Button
-                      size="icon"
-                      variant="ghost"
-                      className="size-8 text-gray-700 hover:bg-white/40"
-                      onClick={() => openGoalDialog('monthly')}
-                    >
-                      <Settings className="size-4" />
-                    </Button>
-                  </div>
-                  <div className="relative w-20 h-20 mx-auto">
-                    {(() => {
-                      const monthlyPercent = getPercentage(monthlyTotal, monthlyGoal);
-                      return (
-                    <svg className="transform -rotate-90 w-20 h-20">
-                      <circle
-                        cx="40"
-                        cy="40"
-                        r="32"
-                        stroke="#ffffff80"
-                        strokeWidth="6"
-                        fill="none"
-                      />
-                      <circle
-                        cx="40"
-                        cy="40"
-                        r="32"
-                        stroke="#000000"
-                        strokeWidth="6"
-                        fill="none"
-                        strokeDasharray={`${2 * Math.PI * 32}`}
-                        strokeDashoffset={`${2 * Math.PI * 32 * (1 - monthlyPercent / 100)}`}
-                        strokeLinecap="round"
-                      />
-                    </svg>
-                      );
-                    })()}
-                    <div className="absolute inset-0 flex items-center justify-center">
-                      <span className="text-xl font-bold text-gray-900">
-                        {Math.round(getPercentage(monthlyTotal, monthlyGoal))}%
-                      </span>
-                    </div>
-                  </div>
-                </div>
-              </CardContent>
-            </Card>
-          </div>
-          <Dialog
-            open={isGoalDialogOpen}
-            onOpenChange={(open) => {
-              setIsGoalDialogOpen(open);
-              if (!open) setEditingGoal(null);
-            }}
-          >
-            <DialogContent>
-              <DialogHeader>
-                <DialogTitle>
-                  {editingGoal === 'daily'
-                    ? 'Daily Goal'
-                    : editingGoal === 'weekly'
-                    ? 'Weekly Goal'
-                    : 'Monthly Goal'} Settings
-                </DialogTitle>
-              </DialogHeader>
-              <div className="space-y-4">
-                <div className="space-y-2">
-                  <Label htmlFor="goal-time">Goal time (HH:MM)</Label>
-                  <Input
-                    id="goal-time"
-                    inputMode="numeric"
-                    placeholder="08:30"
-                    value={goalTimeInput}
-                    onChange={(event) => setGoalTimeInput(event.target.value)}
-                  />
-                </div>
-                <div className="flex justify-end gap-2">
-                  <Button
-                    variant="ghost"
-                    onClick={() => {
-                      setIsGoalDialogOpen(false);
-                      setEditingGoal(null);
-                    }}
+      <div className="grid grid-cols-1 xl:grid-cols-12 gap-6 items-stretch">
+        <div className="xl:col-span-8 space-y-6">
+          <div className="rounded-[36px] bg-white/60 shadow-[0_30px_80px_rgba(15,23,42,0.08)] p-6 space-y-6">
+            <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
+              {[
+                { label: 'Daily Goal', total: dailyTotal, goal: dailyGoal },
+                { label: 'Weekly Goal', total: weeklyTotal, goal: weeklyGoal },
+                { label: 'Monthly Goal', total: monthlyTotal, goal: monthlyGoal }
+              ].map((goal) => {
+                const percent = Math.round(getPercentage(goal.total, goal.goal));
+                return (
+                  <button
+                    key={goal.label}
+                    className="bg-white/80 rounded-3xl shadow-[0_16px_40px_rgba(15,23,42,0.08)] p-5 text-left"
+                    onClick={() =>
+                      openGoalDialog(
+                        goal.label === 'Daily Goal'
+                          ? 'daily'
+                          : goal.label === 'Weekly Goal'
+                          ? 'weekly'
+                          : 'monthly'
+                      )
+                    }
+                    type="button"
                   >
-                    Cancel
-                  </Button>
-                  <Button onClick={saveGoal}>Save</Button>
-                </div>
-              </div>
-            </DialogContent>
-          </Dialog>
+                    <div className="flex items-center justify-between">
+                      <p className="text-sm font-semibold text-gray-900">{goal.label}</p>
+                      <span className="text-xs text-gray-400">{formatGoalLabel(goal.goal)}</span>
+                    </div>
+                    <div className="relative w-24 h-24 mx-auto mt-4">
+                      <svg className="transform -rotate-90 w-24 h-24">
+                        <circle
+                          cx="48"
+                          cy="48"
+                          r="36"
+                          stroke="#e5e7eb"
+                          strokeWidth="8"
+                          fill="none"
+                        />
+                        <circle
+                          cx="48"
+                          cy="48"
+                          r="36"
+                          stroke="#22c55e"
+                          strokeWidth="8"
+                          fill="none"
+                          strokeDasharray={`${2 * Math.PI * 36}`}
+                          strokeDashoffset={`${2 * Math.PI * 36 * (1 - percent / 100)}`}
+                          strokeLinecap="round"
+                        />
+                      </svg>
+                      <div className="absolute inset-0 flex items-center justify-center">
+                        <span className="text-xl font-semibold text-gray-900">{percent}%</span>
+                      </div>
+                    </div>
+                  </button>
+                );
+              })}
+            </div>
 
-          {/* Today's Tasks */}
-          <Card className="bg-white border-0 shadow-sm">
-            <CardContent className="p-6">
+            <div>
               <div className="flex items-center justify-between mb-4">
-                <h3 className="text-base font-bold text-gray-900">Today's Tasks</h3>
+                <h3 className="text-base font-semibold text-gray-900">Today's Tasks</h3>
                 <Dialog open={isAddDialogOpen} onOpenChange={setIsAddDialogOpen}>
                   <DialogTrigger asChild>
-                    <Button size="sm" className="gap-2">
-                      <Plus className="size-4" />
-                      Add
-                    </Button>
+                    <button className="text-sm text-gray-400 hover:text-gray-600">•••</button>
                   </DialogTrigger>
                   <DialogContent>
                     <DialogHeader>
@@ -922,248 +711,306 @@ export function DashboardPage({ accessToken }: DashboardPageProps) {
                         <Button variant="ghost" onClick={() => setIsAddDialogOpen(false)}>
                           Cancel
                         </Button>
-                        <Button onClick={handleAddTodo}>Add task</Button>
+                        <Button onClick={handleAddTodo} className="gap-2">
+                          <Plus className="size-4" />
+                          Add task
+                        </Button>
                       </div>
                     </div>
                   </DialogContent>
                 </Dialog>
               </div>
-              {todos.length === 0 ? (
-                <div className="rounded-lg border border-dashed border-gray-200 p-4 text-sm text-gray-500">
-                  No tasks yet. Add your first task to get started.
-                </div>
-              ) : (
-                <ul className="space-y-2">
-                  {todos.map((todo) => {
-                    const plannedSeconds = getPlannedSeconds(todo);
-                    const actualSeconds = getActualSeconds(todo);
-                    const progressPercent = getProgressPercent(todo);
 
-                    return (
-                    <li key={todo.id} className="flex items-center justify-between gap-3 rounded-lg border border-gray-100 p-3">
-                      <div className="flex items-center gap-3">
-                        <button
-                          className="flex size-8 items-center justify-center rounded-full border border-gray-200 hover:bg-gray-50"
-                          onClick={() => handleToggleComplete(todo)}
-                        >
-                          {todo.completed ? (
-                            <CheckCircle2 className="size-4 text-green-600" />
-                          ) : (
-                            <span className="size-2 rounded-full bg-gray-300"></span>
-                          )}
-                        </button>
-                        <div>
-                          <p className={`text-sm font-medium ${todo.completed ? 'text-gray-400 line-through' : 'text-gray-900'}`}>
-                            {todo.name}
-                          </p>
-                          <p className="text-xs text-gray-500">
-                            {todo.subject ? todo.subject : 'No subject'}
-                            {' • '}
-                            {formatTime(plannedSeconds)}
-                            {todo.shared ? ' • Shared' : ''}
-                          </p>
-                          <div className="mt-2">
-                            <div className="h-2 w-40 bg-gray-200 rounded-full">
-                              <div
-                                className="h-2 rounded-full bg-teal-600"
-                                style={{ width: `${progressPercent}%` }}
-                              />
-                            </div>
-                            <p className="text-[11px] text-gray-500 mt-1">
-                              {formatTime(actualSeconds)} / {formatTime(plannedSeconds)}
-                            </p>
-                          </div>
-                        </div>
-                      </div>
-                      <Switch
-                        checked={Boolean(todo.shared)}
-                        onCheckedChange={(checked) => handleToggleShared(todo, checked)}
-                        className="data-[state=unchecked]:bg-gray-200 data-[state=checked]:bg-teal-600"
-                      />
-                      <div className="flex items-center gap-1">
-                        {activeTimer === todo.id ? (
-                          <Button size="icon" variant="ghost" onClick={() => stopTimer(todo)}>
-                            <Pause className="size-4" />
-                          </Button>
-                        ) : (
-                          <Button size="icon" variant="ghost" onClick={() => startTimer(todo.id)}>
-                            <Play className="size-4" />
-                          </Button>
-                        )}
-                        <Button size="icon" variant="ghost" onClick={() => openEditDialog(todo)}>
-                          <Pencil className="size-4" />
-                        </Button>
-                        <Button size="icon" variant="ghost" onClick={() => handleDeleteTodo(todo.id)}>
-                          <Trash2 className="size-4" />
-                        </Button>
-                      </div>
-                    </li>
-                  );
-                  })}
-                </ul>
-              )}
-              <Dialog
-                open={isEditDialogOpen}
-                onOpenChange={(open) => {
-                  setIsEditDialogOpen(open);
-                  if (!open) setEditingTodoId(null);
-                }}
-              >
-                <DialogContent>
-                  <DialogHeader>
-                    <DialogTitle>Edit task</DialogTitle>
-                  </DialogHeader>
-                  <div className="space-y-4">
-                    <div className="space-y-2">
-                      <Label htmlFor="edit-todo-name">Task name</Label>
-                      <Input
-                        id="edit-todo-name"
-                        value={editTodo.name}
-                        onChange={(event) => setEditTodo(prev => ({ ...prev, name: event.target.value }))}
-                      />
-                    </div>
-                    <div className="space-y-2">
-                      <Label htmlFor="edit-todo-subject">Subject</Label>
-                      <Input
-                        id="edit-todo-subject"
-                        value={editTodo.subject}
-                        onChange={(event) => setEditTodo(prev => ({ ...prev, subject: event.target.value }))}
-                      />
-                    </div>
-                    <div className="space-y-2">
-                      <Label htmlFor="edit-todo-duration">Planned duration (minutes)</Label>
-                      <Input
-                        id="edit-todo-duration"
-                        type="number"
-                        min={0}
-                        value={editTodo.durationMinutes}
-                        onChange={(event) => setEditTodo(prev => ({
-                          ...prev,
-                          durationMinutes: Number(event.target.value || 0)
-                        }))}
-                      />
-                    </div>
-                    <div className="flex items-center justify-between rounded-lg border border-gray-100 p-3">
-                      <div>
-                        <p className="text-sm font-medium text-gray-900">Share with friends</p>
-                        <p className="text-xs text-muted-foreground">Visible on your friend detail page</p>
-                      </div>
-                      <Switch
-                        checked={Boolean(editTodo.shared)}
-                        onCheckedChange={(checked) => setEditTodo(prev => ({ ...prev, shared: checked }))}
-                        className="data-[state=unchecked]:bg-gray-200 data-[state=checked]:bg-teal-600"
-                      />
-                    </div>
-                    <div className="flex justify-end gap-2">
-                      <Button
-                        variant="ghost"
-                        onClick={() => {
-                          setIsEditDialogOpen(false);
-                          setEditingTodoId(null);
-                        }}
-                      >
-                        Cancel
-                      </Button>
-                      <Button onClick={handleUpdateTodo}>Save changes</Button>
-                    </div>
-                  </div>
-                </DialogContent>
-              </Dialog>
-            </CardContent>
-          </Card>
-        </div>
-
-        {/* Right Column - Sidebar Content */}
-        <div className="lg:col-span-4 space-y-6">
-          {/* Nearby Study Rooms */}
-          <Card className="bg-white border-0 shadow-sm">
-            <CardHeader className="pb-3">
-              <CardTitle className="text-base font-bold text-gray-900">Nearby Study Rooms</CardTitle>
-            </CardHeader>
-            <CardContent className="space-y-2">
-              {nearbyRooms.length === 0 ? (
-                <p className="text-sm text-muted-foreground">No study rooms yet.</p>
-              ) : (
-                nearbyRooms.map((room) => (
-                  <button
-                    key={room.id}
-                    className="w-full flex items-center gap-3 p-3 bg-gray-50 rounded-lg hover:bg-gray-100 transition-colors text-left"
-                  >
-                    <div className="w-8 h-8 bg-white rounded-lg flex items-center justify-center text-lg">
-                      {room.icon || '📚'}
-                    </div>
-                    <div>
-                      <span className="text-sm font-medium text-gray-900">{room.topic}</span>
-                      <p className="text-xs text-muted-foreground">{room.location}</p>
-                    </div>
-                  </button>
-                ))
-              )}
-            </CardContent>
-          </Card>
-
-          {/* Friends */}
-          <Card className="bg-white border-0 shadow-sm">
-            <CardHeader className="pb-3">
-              <CardTitle className="text-base font-bold text-gray-900">Friends</CardTitle>
-            </CardHeader>
-            <CardContent className="space-y-3">
-              {friends.length === 0 ? (
-                <p className="text-sm text-muted-foreground">No friends to show.</p>
-              ) : (
-                friends.map((friend) => {
-                  const status = getActivityStatus(friend);
+              <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-5 gap-4">
+                {(todos.length ? todos.slice(0, 5) : Array.from({ length: 5 }).map((_, index) => ({
+                  id: `placeholder-${index}`,
+                  name: `Task ${index + 1}`,
+                  subject: '',
+                  duration: 0,
+                  completed: false
+                }))).map((todo) => {
+                  const plannedSeconds = getPlannedSeconds(todo);
+                  const progressPercent = getProgressPercent(todo);
+                  const pillColor =
+                    progressPercent >= 100
+                      ? 'bg-emerald-100 text-emerald-700'
+                      : progressPercent >= 50
+                      ? 'bg-amber-100 text-amber-700'
+                      : 'bg-rose-100 text-rose-700';
 
                   return (
-                  <div key={friend.id} className="flex items-center justify-between">
-                    <div className="flex items-center gap-3">
-                      <Avatar className="size-8">
-                        <AvatarFallback className="bg-gray-200 text-gray-700 text-xs font-semibold">
-                          {getInitials(friend.username || friend.email || 'F')}
-                        </AvatarFallback>
-                      </Avatar>
-                      <div>
-                        <h4 className="text-sm font-medium text-gray-900">
-                          {friend.username || 'Unknown'}
-                        </h4>
-                        <p className="text-xs text-gray-500">{status.label}</p>
-                      </div>
-                    </div>
-                    <Badge
-                      variant="secondary"
-                      className={`text-xs ${status.isOnline ? 'bg-emerald-100 text-emerald-700' : 'bg-gray-100 text-gray-600'}`}
+                    <div
+                      key={todo.id}
+                      className="bg-white rounded-2xl p-4 shadow-sm border border-white/70 flex flex-col justify-between min-h-[160px]"
                     >
-                      {status.isOnline ? 'Online' : 'Offline'}
-                    </Badge>
-                  </div>
-                );
-                })
-              )}
-            </CardContent>
-          </Card>
+                      <div className="flex items-start justify-between">
+                        <div className="size-10 rounded-full bg-gray-100" />
+                        {'id' in todo && !String(todo.id).startsWith('placeholder-') ? (
+                          <button
+                            className="text-sm text-gray-400 hover:text-gray-600"
+                            onClick={() => openEditDialog(todo as Todo)}
+                            type="button"
+                          >
+                            •••
+                          </button>
+                        ) : (
+                          <span className="text-sm text-gray-300">•••</span>
+                        )}
+                      </div>
+                      <div>
+                        <p className="text-sm font-semibold text-gray-900">{todo.name}</p>
+                        <p className="text-xs text-gray-400">
+                          {plannedSeconds ? formatTime(plannedSeconds) : '0:00'}
+                        </p>
+                      </div>
+                      <span className={`self-end px-2 py-1 rounded-full text-[10px] font-semibold ${pillColor}`}>
+                        {Math.round(progressPercent)}%
+                      </span>
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+          </div>
 
-          {/* Study Streak */}
-          <Card className="bg-white border-0 shadow-sm">
-            <CardHeader className="pb-3">
-              <CardTitle className="text-base font-bold text-gray-900">Study Streak</CardTitle>
-            </CardHeader>
-            <CardContent>
-              <div className="grid grid-cols-7 gap-2">
+          <div className="rounded-[36px] bg-white/55 shadow-[0_20px_60px_rgba(15,23,42,0.08)] p-4">
+            <div className="rounded-[28px] bg-white/85 shadow-[0_16px_40px_rgba(15,23,42,0.06)] p-5">
+              <div className="grid grid-cols-8 text-xs text-gray-400 mb-3 px-1">
+                {['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug'].map((month) => (
+                  <span key={month} className="text-center">
+                    {month}
+                  </span>
+                ))}
+              </div>
+              <div className="overflow-x-auto">
+                <div
+                  className="grid"
+                  style={{
+                    gridTemplateColumns: `repeat(${heatmapColumns}, 10px)`,
+                    columnGap: '4px',
+                    rowGap: '5px'
+                  }}
+                >
+                  {Array.from({ length: 7 * heatmapColumns }).map((_, index) => {
+                    const isActive = index < 9;
+                    const isMid = index >= 9 && index < 13;
+                    const cellColor = isActive ? 'bg-[#22c55e]' : isMid ? 'bg-[#86efac]' : 'bg-gray-200';
+                    return <div key={index} className={`w-3 h-3 rounded-[3px] ${cellColor}`} />;
+                  })}
+                </div>
+              </div>
+              <div className="flex items-center justify-between mt-4 text-xs text-gray-400">
+                <span>Learn how we count contributions</span>
+                <div className="flex items-center gap-2">
+                  <span>Less</span>
+                  <div className="flex items-center gap-1">
+                    <span className="size-3 rounded-[3px] bg-gray-200" />
+                    <span className="size-3 rounded-[3px] bg-[#d1fae5]" />
+                    <span className="size-3 rounded-[3px] bg-[#86efac]" />
+                    <span className="size-3 rounded-[3px] bg-[#22c55e]" />
+                  </div>
+                  <span>More</span>
+                </div>
+              </div>
+            </div>
+          </div>
+
+            <Dialog
+              open={isGoalDialogOpen}
+              onOpenChange={(open) => {
+                setIsGoalDialogOpen(open);
+                if (!open) setEditingGoal(null);
+              }}
+            >
+              <DialogContent>
+                <DialogHeader>
+                  <DialogTitle>
+                    {editingGoal === 'daily'
+                      ? 'Daily Goal'
+                      : editingGoal === 'weekly'
+                      ? 'Weekly Goal'
+                      : 'Monthly Goal'} Settings
+                  </DialogTitle>
+                </DialogHeader>
+                <div className="space-y-4">
+                  <div className="space-y-2">
+                    <Label htmlFor="goal-time">Goal time (HH:MM)</Label>
+                    <Input
+                      id="goal-time"
+                      inputMode="numeric"
+                      placeholder="08:30"
+                      value={goalTimeInput}
+                      onChange={(event) => setGoalTimeInput(event.target.value)}
+                    />
+                  </div>
+                  <div className="flex justify-end gap-2">
+                    <Button
+                      variant="ghost"
+                      onClick={() => {
+                        setIsGoalDialogOpen(false);
+                        setEditingGoal(null);
+                      }}
+                    >
+                      Cancel
+                    </Button>
+                    <Button onClick={saveGoal}>Save</Button>
+                  </div>
+                </div>
+              </DialogContent>
+            </Dialog>
+
+            <Dialog
+              open={isEditDialogOpen}
+              onOpenChange={(open) => {
+                setIsEditDialogOpen(open);
+                if (!open) setEditingTodoId(null);
+              }}
+            >
+              <DialogContent>
+                <DialogHeader>
+                  <DialogTitle>Edit task</DialogTitle>
+                </DialogHeader>
+                <div className="space-y-4">
+                  <div className="space-y-2">
+                    <Label htmlFor="edit-todo-name">Task name</Label>
+                    <Input
+                      id="edit-todo-name"
+                      value={editTodo.name}
+                      onChange={(event) => setEditTodo(prev => ({ ...prev, name: event.target.value }))}
+                    />
+                  </div>
+                  <div className="space-y-2">
+                    <Label htmlFor="edit-todo-subject">Subject</Label>
+                    <Input
+                      id="edit-todo-subject"
+                      value={editTodo.subject}
+                      onChange={(event) => setEditTodo(prev => ({ ...prev, subject: event.target.value }))}
+                    />
+                  </div>
+                  <div className="space-y-2">
+                    <Label htmlFor="edit-todo-duration">Planned duration (minutes)</Label>
+                    <Input
+                      id="edit-todo-duration"
+                      type="number"
+                      min={0}
+                      value={editTodo.durationMinutes}
+                      onChange={(event) => setEditTodo(prev => ({
+                        ...prev,
+                        durationMinutes: Number(event.target.value || 0)
+                      }))}
+                    />
+                  </div>
+                  <div className="flex items-center justify-between rounded-lg border border-gray-100 p-3">
+                    <div>
+                      <p className="text-sm font-medium text-gray-900">Share with friends</p>
+                      <p className="text-xs text-muted-foreground">Visible on your friend detail page</p>
+                    </div>
+                    <Switch
+                      checked={Boolean(editTodo.shared)}
+                      onCheckedChange={(checked) => setEditTodo(prev => ({ ...prev, shared: checked }))}
+                      className="data-[state=unchecked]:bg-gray-200 data-[state=checked]:bg-teal-600"
+                    />
+                  </div>
+                  <div className="flex justify-end gap-2">
+                    <Button
+                      variant="ghost"
+                      onClick={() => {
+                        setIsEditDialogOpen(false);
+                        setEditingTodoId(null);
+                      }}
+                    >
+                      Cancel
+                    </Button>
+                    <Button onClick={handleUpdateTodo} className="gap-2">
+                      <Pencil className="size-4" />
+                      Save changes
+                    </Button>
+                  </div>
+                </div>
+              </DialogContent>
+            </Dialog>
+          </div>
+
+        <div className="xl:col-span-4">
+          <div className="rounded-[36px] bg-white/60 shadow-[0_30px_80px_rgba(15,23,42,0.08)] p-6 space-y-6 h-full flex flex-col">
+            <div className="bg-white/90 rounded-3xl shadow-[0_20px_60px_rgba(15,23,42,0.08)] p-5">
+              <h3 className="text-base font-semibold text-gray-900 mb-4">Nearby Study Rooms</h3>
+              <div className="space-y-3">
+                {(nearbyRooms.length ? nearbyRooms.slice(0, 3) : [
+                  { id: 'placeholder-1', topic: 'Library Quiet Zone', location: 'Library Quiet Zone', icon: '📚' },
+                  { id: 'placeholder-2', topic: 'Library Quiet Zone', location: 'Library Quiet Zone', icon: '📚' },
+                  { id: 'placeholder-3', topic: 'Library Quiet Zone', location: 'Library Quiet Zone', icon: '📚' }
+                ]).map((room) => (
+                  <button
+                    key={room.id}
+                    className="w-full flex items-center gap-3 px-3 py-2 bg-gray-100/70 rounded-full hover:bg-gray-100 transition-colors text-left"
+                  >
+                    <div className="size-9 bg-white rounded-full flex items-center justify-center text-base shadow-sm ring-4 ring-white/80">
+                      {room.icon || '📚'}
+                    </div>
+                    <span className="text-xs font-medium text-gray-900">{room.topic}</span>
+                  </button>
+                ))}
+              </div>
+              <button className="mt-4 w-full text-xs text-gray-400 tracking-[0.2em] underline underline-offset-4">
+                MORE
+              </button>
+            </div>
+
+            <div className="bg-white/90 rounded-3xl shadow-[0_20px_60px_rgba(15,23,42,0.08)] p-5">
+              <h3 className="text-base font-semibold text-gray-900 mb-4">Friends</h3>
+              <div className="space-y-4">
+                {(friends.length ? friends.slice(0, 4) : Array.from({ length: 4 }).map((_, index) => ({
+                  id: `placeholder-${index}`,
+                  username: 'Howon',
+                  email: '',
+                  lastActivityAt: index % 2 === 0 ? new Date().toISOString() : null
+                }))).map((friend) => {
+                  const status = getActivityStatus(friend);
+                  return (
+                    <div key={friend.id} className="flex items-center justify-between">
+                      <div className="flex items-center gap-3">
+                        <Avatar className="size-9">
+                          <AvatarFallback className="bg-gray-100 text-gray-600 text-xs font-semibold">
+                            {getInitials(friend.username || friend.email || 'F')}
+                          </AvatarFallback>
+                        </Avatar>
+                        <div>
+                          <p className="text-sm font-medium text-gray-900">
+                            {friend.username || 'Unknown'}
+                          </p>
+                          <p className={`text-xs ${status.isOnline ? 'text-emerald-500' : 'text-gray-400'}`}>
+                            {status.isOnline ? 'Online' : 'Offline'}
+                          </p>
+                        </div>
+                      </div>
+                      <button className="px-3 py-1 rounded-full bg-rose-100 text-[10px] font-semibold text-rose-600">
+                        CHAT
+                      </button>
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+
+            <div className="bg-white/90 rounded-3xl shadow-[0_20px_60px_rgba(15,23,42,0.08)] p-5">
+              <h3 className="text-base font-semibold text-gray-900 mb-4">Study Streak</h3>
+              <div className="flex items-center justify-between">
                 {studyStreak.map((day, index) => (
-                  <div key={index} className="flex flex-col items-center gap-1">
+                  <div key={index} className="flex flex-col items-center gap-2">
                     <span className="text-xs text-gray-500 font-medium">{day.day}</span>
-                    <div className={`w-8 h-8 rounded-lg flex items-center justify-center ${
-                      day.completed ? 'bg-green-100' : 'bg-gray-100'
-                    }`}>
-                      {day.completed && (
-                        <CheckCircle2 className="size-4 text-green-600" />
-                      )}
+                    <div
+                      className={`size-8 rounded-full flex items-center justify-center ${
+                        day.completed ? 'bg-emerald-200 text-emerald-700' : 'bg-gray-100'
+                      }`}
+                    >
+                      {day.completed && <CheckCircle2 className="size-4" />}
                     </div>
                   </div>
                 ))}
               </div>
-            </CardContent>
-          </Card>
+            </div>
+          </div>
         </div>
       </div>
     </div>
