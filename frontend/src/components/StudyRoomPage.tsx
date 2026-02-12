@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef } from 'react';
+import { useState, useEffect, useRef, useMemo } from 'react';
 import { Button } from './ui/button';
 import { Card, CardContent, CardHeader, CardTitle } from './ui/card';
 import {
@@ -118,7 +118,16 @@ export function StudyRoomPage({
   const [quizCount, setQuizCount] = useState(25);
   const [quizDifficulty, setQuizDifficulty] = useState<'easy' | 'medium' | 'hard'>('medium');
   const [showQuizCompleted, setShowQuizCompleted] = useState(false);
+  const [currentTime, setCurrentTime] = useState(new Date());
+  const [completionStatus, setCompletionStatus] = useState<{ completed: number; total: number; allCompleted: boolean }>({ completed: 0, total: 0, allCompleted: false });
   const fileInputRef = useRef<HTMLInputElement>(null);
+
+  // Check if study time has started
+  const isStudyTime = useMemo(() => {
+    if (!group?.date || !group?.time) return false;
+    const meetingDateTime = new Date(`${group.date}T${group.time}`);
+    return currentTime >= meetingDateTime;
+  }, [group, currentTime]);
 
   // Fetch room details
   useEffect(() => {
@@ -204,9 +213,9 @@ export function StudyRoomPage({
         currentQuestionIndex,
         userAnswers,
       };
-      localStorage.setItem(`quiz-progress-${groupId}`, JSON.stringify(progress));
+      localStorage.setItem(`quiz-progress-${groupId}-${currentUserId}`, JSON.stringify(progress));
     }
-  }, [currentQuestionIndex, userAnswers, groupId, quiz]);
+  }, [currentQuestionIndex, userAnswers, groupId, currentUserId, quiz]);
 
   // Check if quiz is completed
   useEffect(() => {
@@ -221,6 +230,37 @@ export function StudyRoomPage({
       }
     }
   }, [quiz, userAnswers]);
+
+  // Update current time every minute to check study start time
+  useEffect(() => {
+    const interval = setInterval(() => {
+      setCurrentTime(new Date());
+    }, 60000); // Update every minute
+
+    return () => clearInterval(interval);
+  }, []);
+
+  // Poll completion status when quiz exists
+  useEffect(() => {
+    if (!quiz || !isStudyTime) return;
+
+    const fetchCompletionStatus = async () => {
+      try {
+        const res = await fetch(`${apiBase}/study-groups/${groupId}/quiz/completion`, {
+          headers: auth(accessToken),
+        });
+        const data = await res.json();
+        setCompletionStatus(data);
+      } catch (e) {
+        console.error('Failed to fetch completion status', e);
+      }
+    };
+
+    fetchCompletionStatus();
+    const interval = setInterval(fetchCompletionStatus, 2000); // Poll every 2 seconds
+
+    return () => clearInterval(interval);
+  }, [quiz, isStudyTime, groupId, accessToken]);
 
   // WebSocket: join room + receive messages
   useEffect(() => {
@@ -322,7 +362,7 @@ export function StudyRoomPage({
         setQuiz(data.quiz);
         
         // Restore quiz progress from localStorage
-        const savedProgress = localStorage.getItem(`quiz-progress-${groupId}`);
+        const savedProgress = localStorage.getItem(`quiz-progress-${groupId}-${currentUserId}`);
         if (savedProgress) {
           try {
             const progress = JSON.parse(savedProgress);
@@ -402,7 +442,7 @@ export function StudyRoomPage({
       setShowQuizCompleted(false);
       
       // Clear saved progress for new quiz
-      localStorage.removeItem(`quiz-progress-${groupId}`);
+      localStorage.removeItem(`quiz-progress-${groupId}-${currentUserId}`);
       
       toast.success('Quiz generated!');
     } catch (error) {
@@ -506,6 +546,8 @@ export function StudyRoomPage({
   }
 
   const currentQuestion = quiz?.questions[currentQuestionIndex];
+  const mapQuery = group ? encodeURIComponent(group.location) : '';
+  const mapSrc = `https://www.google.com/maps?q=${mapQuery}&output=embed`;
 
   return (
     <div className="space-y-4">
@@ -538,9 +580,24 @@ export function StudyRoomPage({
       </div>
 
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
-        {/* Left: Group Quiz */}
-        <div className="lg:col-span-2 rounded-lg border bg-white h-[520px] min-h-[280px] flex flex-col">
-          {showQuizCompleted && !showResults ? (
+        {/* Left: Map or Group Quiz */}
+        {!isStudyTime ? (
+          /* Before Study Time - Show Map */
+          <div className="lg:col-span-2 rounded-lg overflow-hidden border bg-gray-100 h-[520px] min-h-[280px]">
+            <iframe
+              title="Meeting location"
+              src={mapSrc}
+              className="w-full h-full"
+              style={{ border: 0 }}
+              allowFullScreen
+              loading="lazy"
+              referrerPolicy="no-referrer-when-downgrade"
+            />
+          </div>
+        ) : (
+          /* After Study Time - Show Group Quiz */
+          <div className="lg:col-span-2 rounded-lg border bg-white h-[520px] min-h-[280px] flex flex-col">
+            {showQuizCompleted && !showResults ? (
             /* Quiz Completed View */
             <div className="flex-1 flex items-center justify-center p-6">
               <div className="text-center max-w-md">
@@ -552,11 +609,38 @@ export function StudyRoomPage({
                   </p>
                 </div>
 
+                {/* Completion Progress */}
+                {!completionStatus.allCompleted && (
+                  <div className="bg-blue-50 border border-blue-200 rounded-lg p-4 mb-6">
+                    <div className="flex items-center justify-center gap-2 mb-2">
+                      <Loader2 className="size-5 text-blue-600 animate-spin" />
+                      <p className="text-sm font-semibold text-blue-900">
+                        Waiting for others...
+                      </p>
+                    </div>
+                    <p className="text-lg font-bold text-blue-700">
+                      {completionStatus.completed} / {completionStatus.total} completed
+                    </p>
+                    <p className="text-xs text-blue-600 mt-2">
+                      Results will be available when everyone finishes
+                    </p>
+                  </div>
+                )}
+
+                {completionStatus.allCompleted && (
+                  <div className="bg-green-50 border border-green-200 rounded-lg p-4 mb-6">
+                    <p className="text-sm font-semibold text-green-900">
+                      ✓ Everyone has completed the quiz!
+                    </p>
+                  </div>
+                )}
+
                 <div className="space-y-3">
                   <Button
                     onClick={handleViewResults}
                     size="lg"
                     className="w-full"
+                    disabled={!completionStatus.allCompleted}
                   >
                     <BookOpen className="size-5 mr-2" />
                     View Results
@@ -579,10 +663,6 @@ export function StudyRoomPage({
                     Start New Quiz
                   </Button>
                 </div>
-
-                <p className="text-xs text-muted-foreground mt-6">
-                  Others can continue at their own pace
-                </p>
               </div>
             </div>
           ) : showResults ? (
@@ -664,7 +744,8 @@ export function StudyRoomPage({
                     variant="outline"
                     size="sm"
                     onClick={handleViewResults}
-                    disabled={Object.keys(userAnswers).length === 0}
+                    disabled={!completionStatus.allCompleted}
+                    title={!completionStatus.allCompleted ? `Waiting for others (${completionStatus.completed}/${completionStatus.total} completed)` : 'View results'}
                   >
                     View Results
                   </Button>
@@ -786,7 +867,8 @@ export function StudyRoomPage({
               </div>
             </div>
           )}
-        </div>
+          </div>
+        )}
 
         {/* Right: Users + chat */}
         <div className="lg:col-span-1 h-[520px] flex flex-col gap-4">
@@ -887,6 +969,44 @@ export function StudyRoomPage({
           </Card>
         </div>
       </div>
+
+      {/* Room Info (only shown before study time) */}
+      {!isStudyTime && group && (
+        <Card>
+          <CardHeader className="pb-2">
+            <CardTitle className="text-lg">Meeting Information</CardTitle>
+          </CardHeader>
+          <CardContent className="space-y-3">
+            <div className="flex items-start gap-2 text-sm">
+              <BookOpen className="size-4 mt-0.5 flex-shrink-0 text-muted-foreground" />
+              <span><strong>Topic:</strong> {group.topic}</span>
+            </div>
+            <div className="flex items-start gap-2 text-sm">
+              <Users className="size-4 mt-0.5 flex-shrink-0 text-muted-foreground" />
+              <span><strong>Location:</strong> {group.location}</span>
+            </div>
+            <div className="flex items-center gap-2 text-sm">
+              <span className="text-muted-foreground">📅</span>
+              <span><strong>Date:</strong> {group.date}</span>
+            </div>
+            <div className="flex items-center gap-2 text-sm">
+              <span className="text-muted-foreground">🕐</span>
+              <span><strong>Time:</strong> {group.time || '—'}</span>
+            </div>
+            <div className="text-sm text-muted-foreground pt-2 border-t">
+              {(group.participantsWithNames ?? []).length} / {group.maxParticipants} participants
+            </div>
+            <div className="bg-blue-50 border border-blue-200 rounded-lg p-3 mt-4">
+              <p className="text-sm text-blue-900">
+                <strong>💡 Quiz will be available at {group.time}</strong>
+              </p>
+              <p className="text-xs text-blue-700 mt-1">
+                Review the location and prepare your study materials!
+              </p>
+            </div>
+          </CardContent>
+        </Card>
+      )}
 
       {/* Quiz Settings Popup */}
       {showQuizSettings && (

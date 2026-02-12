@@ -69,7 +69,7 @@ export function DashboardPage({ accessToken, onOpenChat }: DashboardPageProps) {
   const [studyStreak, setStudyStreak] = useState<{ day: string; completed: boolean }[]>([]);
   const heatmapColumns = 52;
 
-  
+
   const [newTodo, setNewTodo] = useState({
     name: '',
     subject: '',

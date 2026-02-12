@@ -10,6 +10,7 @@ import { FriendDetailPage } from './components/FriendDetailPage';
 import { SettingsPage } from './components/SettingsPage';
 import { ProfilePage } from './components/ProfilePage';
 import { StudyRoomPage } from './components/StudyRoomPage';
+import { MeetingPage } from './components/MeetingPage';
 import { Toaster } from './components/ui/sonner';
 import { Button } from './components/ui/button';
 import { Input } from './components/ui/input';
@@ -27,13 +28,14 @@ import {
 } from 'lucide-react';
 import { toast } from 'sonner';
 
-type Page = 'login' | 'register' | 'dashboard' | 'study-groups' | 'solo-study' | 'friends' | 'settings' | 'profile' | 'friend-detail' | 'room';
+type Page = 'login' | 'register' | 'dashboard' | 'study-groups' | 'solo-study' | 'friends' | 'settings' | 'profile' | 'friend-detail' | 'room' | 'meeting';
 
 const APP_PAGES: Page[] = ['dashboard', 'study-groups', 'solo-study', 'friends', 'settings'];
 
 function getPageFromHash(): Page {
   const hash = window.location.hash.slice(1);
   if (hash.startsWith('room-')) return 'room';
+  if (hash.startsWith('meeting-')) return 'meeting';
   if (APP_PAGES.includes(hash as Page)) return hash as Page;
   return 'dashboard';
 }
@@ -41,6 +43,12 @@ function getPageFromHash(): Page {
 function getGroupIdFromHash(): string | null {
   const hash = window.location.hash.slice(1);
   if (hash.startsWith('room-')) return hash.slice(5);
+  return null;
+}
+
+function getMeetingIdFromHash(): string | null {
+  const hash = window.location.hash.slice(1);
+  if (hash.startsWith('meeting-')) return hash.slice(8);
   return null;
 }
 
@@ -109,6 +117,15 @@ export default function App() {
   const chatPanelOpenRef = useRef(false);
   const chatScrollRef = useRef<HTMLDivElement | null>(null);
   const chatAutoScrollRef = useRef(true);
+  const [currentMeetingId, setCurrentMeetingId] = useState<string | null>(null);
+  const [inMeeting, setInMeeting] = useState(false);
+  const [zoomPopupPos, setZoomPopupPos] = useState({ x: 24, y: 24 });
+  const [zoomPopupSize, setZoomPopupSize] = useState({ width: 360, height: 280 });
+  const zoomDragRef = useRef({ isDragging: false, startX: 0, startY: 0, startLeft: 0, startTop: 0 });
+  const zoomResizeRef = useRef({ isResizing: false, startX: 0, startY: 0, startW: 0, startH: 0 });
+  const zoomContainerRef = useRef<HTMLDivElement>(null);
+  const zoomClientRef = useRef<unknown>(null);
+  const zoomMeetingIdRef = useRef<string | null>(null);
 
   useEffect(() => {
     checkSession();
@@ -125,8 +142,10 @@ export default function App() {
     const syncHash = () => {
       const page = getPageFromHash();
       const gid = page === 'room' ? getGroupIdFromHash() : null;
+      const mid = page === 'meeting' ? getMeetingIdFromHash() : null;
       setCurrentPage(page);
       setCurrentGroupId(gid);
+      setCurrentMeetingId(mid);
       if (page === 'room' && gid) setRoomUserIsIn(gid);
     };
     syncHash();
@@ -135,10 +154,11 @@ export default function App() {
   }, [accessToken]);
 
   const navigateTo = (page: Page) => {
-    if (page === 'room') return;
+    if (page === 'room' || page === 'meeting') return;
     if (APP_PAGES.includes(page)) window.location.hash = page;
     setCurrentPage(page);
     setCurrentGroupId(null);
+    setCurrentMeetingId(null);
   };
 
   const navigateToRoom = (groupId: string) => {
@@ -147,6 +167,117 @@ export default function App() {
     setCurrentGroupId(groupId);
     setRoomUserIsIn(groupId);
   };
+
+  const navigateToMeeting = (meetingId: string) => {
+    window.location.hash = `meeting-${meetingId}`;
+    setCurrentPage('meeting');
+    setCurrentMeetingId(meetingId);
+  };
+
+  const handleMeetingJoined = (client: unknown) => {
+    zoomClientRef.current = client;
+    zoomMeetingIdRef.current = currentMeetingId;
+    setInMeeting(true);
+    const c = client as { on?: (event: string, cb: (payload: { state?: string }) => void) => void };
+    if (typeof c?.on === 'function') {
+      c.on('connection-change', (payload) => {
+        if (payload?.state === 'Closed') {
+          zoomClientRef.current = null;
+          zoomMeetingIdRef.current = null;
+          setInMeeting(false);
+        }
+      });
+    }
+  };
+
+  const handleLeaveFloatingMeeting = async () => {
+    try {
+      const client = zoomClientRef.current as { leaveMeeting?: (opts?: { confirm?: boolean }) => Promise<unknown> } | null;
+      if (client?.leaveMeeting) await client.leaveMeeting({ confirm: false });
+      const ZoomMtgEmbedded = (await import('@zoom/meetingsdk/embedded')).default;
+      ZoomMtgEmbedded.destroyClient?.();
+    } catch {
+      // ignore
+    } finally {
+      zoomClientRef.current = null;
+      zoomMeetingIdRef.current = null;
+      setInMeeting(false);
+      if (currentPage === 'meeting') navigateTo('dashboard');
+    }
+  };
+
+  const ZOOM_POPUP_PADDING = 24;
+  const ZOOM_POPUP_MIN_WIDTH = 280;
+  const ZOOM_POPUP_MIN_HEIGHT = 200;
+  const ZOOM_POPUP_MAX_WIDTH = 720;
+  const ZOOM_POPUP_MAX_HEIGHT = 560;
+
+  useEffect(() => {
+    if (inMeeting && currentPage !== 'meeting') {
+      setZoomPopupPos({
+        x: window.innerWidth - zoomPopupSize.width - ZOOM_POPUP_PADDING,
+        y: window.innerHeight - zoomPopupSize.height - ZOOM_POPUP_PADDING,
+      });
+    }
+  }, [inMeeting, currentPage]);
+
+  const onZoomPopupMouseDown = (e: React.MouseEvent) => {
+    if ((e.target as HTMLElement).closest('button') || (e.target as HTMLElement).closest('[data-resize-handle]')) return;
+    zoomDragRef.current = {
+      isDragging: true,
+      startX: e.clientX,
+      startY: e.clientY,
+      startLeft: zoomPopupPos.x,
+      startTop: zoomPopupPos.y,
+    };
+  };
+
+  const onZoomPopupResizeMouseDown = (e: React.MouseEvent) => {
+    e.preventDefault();
+    e.stopPropagation();
+    zoomResizeRef.current = {
+      isResizing: true,
+      startX: e.clientX,
+      startY: e.clientY,
+      startW: zoomPopupSize.width,
+      startH: zoomPopupSize.height,
+    };
+  };
+
+  useEffect(() => {
+    if (!inMeeting) return;
+    const onMove = (e: MouseEvent) => {
+      if (zoomResizeRef.current.isResizing) {
+        const dw = e.clientX - zoomResizeRef.current.startX;
+        const dh = e.clientY - zoomResizeRef.current.startY;
+        setZoomPopupSize({
+          width: Math.min(ZOOM_POPUP_MAX_WIDTH, Math.max(ZOOM_POPUP_MIN_WIDTH, zoomResizeRef.current.startW + dw)),
+          height: Math.min(ZOOM_POPUP_MAX_HEIGHT, Math.max(ZOOM_POPUP_MIN_HEIGHT, zoomResizeRef.current.startH + dh)),
+        });
+        return;
+      }
+      if (!zoomDragRef.current.isDragging) return;
+      const dx = e.clientX - zoomDragRef.current.startX;
+      const dy = e.clientY - zoomDragRef.current.startY;
+      setZoomPopupPos({
+        x: Math.max(0, zoomDragRef.current.startLeft + dx),
+        y: Math.max(0, zoomDragRef.current.startTop + dy),
+      });
+    };
+    const onUp = () => {
+      zoomDragRef.current.isDragging = false;
+      zoomResizeRef.current.isResizing = false;
+    };
+    window.addEventListener('mousemove', onMove);
+    window.addEventListener('mouseup', onUp);
+    return () => {
+      window.removeEventListener('mousemove', onMove);
+      window.removeEventListener('mouseup', onUp);
+    };
+  }, [inMeeting]);
+
+  const popupW = zoomPopupSize.width;
+  const popupH = zoomPopupSize.height;
 
   const checkSession = async () => {
     const savedToken = localStorage.getItem('accessToken');
@@ -717,6 +848,7 @@ export default function App() {
               currentUserUsername={user?.username}
               roomUserIsIn={roomUserIsIn}
               onJoinRoom={navigateToRoom}
+              onJoinMeeting={navigateToMeeting}
             />
           )}
           {currentPage === 'room' && currentGroupId && (
@@ -726,6 +858,16 @@ export default function App() {
               currentUserId={user?.id || ''}
               onBack={() => navigateTo('study-groups')}
               onLeaveRoom={() => setRoomUserIsIn(null)}
+            />
+          )}
+          {currentPage === 'meeting' && currentMeetingId && (
+            <MeetingPage
+              meetingId={currentMeetingId}
+              accessToken={accessToken}
+              userName={user?.username || user?.email || 'Guest'}
+              onBack={() => navigateTo('dashboard')}
+              zoomContainerRef={zoomContainerRef}
+              onMeetingJoined={handleMeetingJoined}
             />
           )}
           {currentPage === 'solo-study' && (
@@ -881,6 +1023,71 @@ export default function App() {
             </div>
           </div>
         )}
+
+        {/* Zoom meeting: full size on meeting page, small popup when on other pages */}
+        <div
+          ref={zoomContainerRef}
+          className={`bg-[#1a1a1a] rounded-xl overflow-hidden border border-gray-200 z-50 ${
+            inMeeting
+              ? currentPage === 'meeting'
+                ? 'fixed left-32 right-8 top-6 bottom-6 shadow-xl'
+                : 'fixed shadow-2xl'
+              : currentPage === 'meeting'
+                ? 'fixed left-32 right-8 top-6 bottom-6 opacity-0 pointer-events-none'
+                : 'fixed right-6 bottom-6 w-0 h-0 overflow-hidden opacity-0 pointer-events-none'
+          }`}
+          style={inMeeting && currentPage !== 'meeting' ? { left: zoomPopupPos.x, top: zoomPopupPos.y, width: popupW, height: popupH } : undefined}
+        >
+          {inMeeting && currentPage !== 'meeting' && (
+            <div
+              data-resize-handle
+              className="absolute right-0 bottom-0 w-4 h-4 cursor-nwse-resize resize-handle z-20"
+              onMouseDown={onZoomPopupResizeMouseDown}
+              role="presentation"
+              aria-label="Resize"
+            >
+              <svg className="absolute right-1 bottom-1 w-3 h-3 text-white/50" viewBox="0 0 16 16" fill="currentColor">
+                <path d="M15 15H9v-2h4V9h2v6zM7 15H1V9h2v4h4v2zM15 7V1H9v2h4v4h2zM7 1v2H3v4H1V1h6z" />
+              </svg>
+            </div>
+          )}
+          {inMeeting && currentPage === 'meeting' && (
+            <div className="absolute top-0 left-0 right-0 h-10 bg-black/60 flex items-center justify-end px-3 z-10">
+              <button
+                type="button"
+                onClick={handleLeaveFloatingMeeting}
+                className="text-red-400 hover:text-red-300 text-sm font-medium px-3 py-1.5 rounded bg-red-500/20 hover:bg-red-500/30"
+              >
+                Leave
+              </button>
+            </div>
+          )}
+          {inMeeting && currentPage !== 'meeting' && (
+            <div
+              className="absolute top-0 left-0 right-0 h-10 bg-black/60 flex items-center justify-between gap-2 px-3 z-10 cursor-grab active:cursor-grabbing select-none"
+              onMouseDown={onZoomPopupMouseDown}
+              role="presentation"
+            >
+              <span className="text-white text-sm font-medium truncate">Meeting in progress</span>
+              <div className="flex items-center gap-1 shrink-0">
+                <button
+                  type="button"
+                  onClick={() => zoomMeetingIdRef.current && navigateToMeeting(zoomMeetingIdRef.current)}
+                  className="text-white/90 hover:text-white text-xs font-medium px-2 py-1 rounded bg-white/10 hover:bg-white/20"
+                >
+                  Return to meeting
+                </button>
+                <button
+                  type="button"
+                  onClick={handleLeaveFloatingMeeting}
+                  className="text-red-400 hover:text-red-300 text-sm font-medium"
+                >
+                  Leave
+                </button>
+              </div>
+            </div>
+          )}
+        </div>
       </div>
 
       <Toaster />
