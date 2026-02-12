@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import { apiBase } from './utils/api';
 import { LoginPage } from './components/LoginPage';
 import { RegisterPage, RegisterData } from './components/RegisterPage';
@@ -88,6 +88,12 @@ export default function App() {
   const [deletingSessionId, setDeletingSessionId] = useState<string | null>(null);
   const [roomUserIsIn, setRoomUserIsIn] = useState<string | null>(null);
   const [currentMeetingId, setCurrentMeetingId] = useState<string | null>(null);
+  const [inMeeting, setInMeeting] = useState(false);
+  const [zoomPopupPos, setZoomPopupPos] = useState({ x: 24, y: 24 });
+  const zoomDragRef = useRef({ isDragging: false, startX: 0, startY: 0, startLeft: 0, startTop: 0 });
+  const zoomContainerRef = useRef<HTMLDivElement>(null);
+  const zoomClientRef = useRef<unknown>(null);
+  const zoomMeetingIdRef = useRef<string | null>(null);
 
   useEffect(() => {
     checkSession();
@@ -135,6 +141,82 @@ export default function App() {
     setCurrentPage('meeting');
     setCurrentMeetingId(meetingId);
   };
+
+  const handleMeetingJoined = (client: unknown) => {
+    zoomClientRef.current = client;
+    zoomMeetingIdRef.current = currentMeetingId;
+    setInMeeting(true);
+    const c = client as { on?: (event: string, cb: (payload: { state?: string }) => void) => void };
+    if (typeof c?.on === 'function') {
+      c.on('connection-change', (payload) => {
+        if (payload?.state === 'Closed') {
+          zoomClientRef.current = null;
+          zoomMeetingIdRef.current = null;
+          setInMeeting(false);
+        }
+      });
+    }
+  };
+
+  const handleLeaveFloatingMeeting = async () => {
+    try {
+      const client = zoomClientRef.current as { leaveMeeting?: (opts?: { confirm?: boolean }) => Promise<unknown> } | null;
+      if (client?.leaveMeeting) await client.leaveMeeting({ confirm: false });
+      const ZoomMtgEmbedded = (await import('@zoom/meetingsdk/embedded')).default;
+      ZoomMtgEmbedded.destroyClient?.();
+    } catch {
+      // ignore
+    } finally {
+      zoomClientRef.current = null;
+      zoomMeetingIdRef.current = null;
+      setInMeeting(false);
+      if (currentPage === 'meeting') navigateTo('dashboard');
+    }
+  };
+
+  const ZOOM_POPUP_WIDTH = 360;
+  const ZOOM_POPUP_HEIGHT = 280;
+  const ZOOM_POPUP_PADDING = 24;
+
+  useEffect(() => {
+    if (inMeeting && currentPage !== 'meeting') {
+      setZoomPopupPos({
+        x: window.innerWidth - ZOOM_POPUP_WIDTH - ZOOM_POPUP_PADDING,
+        y: window.innerHeight - ZOOM_POPUP_HEIGHT - ZOOM_POPUP_PADDING,
+      });
+    }
+  }, [inMeeting, currentPage]);
+
+  const onZoomPopupMouseDown = (e: React.MouseEvent) => {
+    if ((e.target as HTMLElement).closest('button')) return;
+    zoomDragRef.current = {
+      isDragging: true,
+      startX: e.clientX,
+      startY: e.clientY,
+      startLeft: zoomPopupPos.x,
+      startTop: zoomPopupPos.y,
+    };
+  };
+
+  useEffect(() => {
+    if (!inMeeting) return;
+    const onMove = (e: MouseEvent) => {
+      if (!zoomDragRef.current.isDragging) return;
+      const dx = e.clientX - zoomDragRef.current.startX;
+      const dy = e.clientY - zoomDragRef.current.startY;
+      setZoomPopupPos({
+        x: Math.max(0, zoomDragRef.current.startLeft + dx),
+        y: Math.max(0, zoomDragRef.current.startTop + dy),
+      });
+    };
+    const onUp = () => { zoomDragRef.current.isDragging = false; };
+    window.addEventListener('mousemove', onMove);
+    window.addEventListener('mouseup', onUp);
+    return () => {
+      window.removeEventListener('mousemove', onMove);
+      window.removeEventListener('mouseup', onUp);
+    };
+  }, [inMeeting]);
 
   const checkSession = async () => {
     const savedToken = localStorage.getItem('accessToken');
@@ -529,6 +611,8 @@ export default function App() {
               accessToken={accessToken}
               userName={user?.username || user?.email || 'Guest'}
               onBack={() => navigateTo('dashboard')}
+              zoomContainerRef={zoomContainerRef}
+              onMeetingJoined={handleMeetingJoined}
             />
           )}
           {currentPage === 'solo-study' && (
@@ -565,6 +649,58 @@ export default function App() {
             />
           )}
         </main>
+
+        {/* Zoom meeting: full size on meeting page, small popup when on other pages */}
+        <div
+          ref={zoomContainerRef}
+          className={`bg-[#1a1a1a] rounded-xl overflow-hidden border border-gray-200 z-50 ${
+            inMeeting
+              ? currentPage === 'meeting'
+                ? 'fixed left-32 right-8 top-6 bottom-6 shadow-xl'
+                : 'fixed shadow-2xl'
+              : currentPage === 'meeting'
+                ? 'fixed left-32 right-8 top-6 bottom-6 opacity-0 pointer-events-none'
+                : 'fixed right-6 bottom-6 w-0 h-0 overflow-hidden opacity-0 pointer-events-none'
+          }`}
+          style={inMeeting && currentPage !== 'meeting' ? { left: zoomPopupPos.x, top: zoomPopupPos.y, width: ZOOM_POPUP_WIDTH, height: ZOOM_POPUP_HEIGHT } : undefined}
+        >
+          {inMeeting && currentPage === 'meeting' && (
+            <div className="absolute top-0 left-0 right-0 h-10 bg-black/60 flex items-center justify-end px-3 z-10">
+              <button
+                type="button"
+                onClick={handleLeaveFloatingMeeting}
+                className="text-red-400 hover:text-red-300 text-sm font-medium px-3 py-1.5 rounded bg-red-500/20 hover:bg-red-500/30"
+              >
+                Leave
+              </button>
+            </div>
+          )}
+          {inMeeting && currentPage !== 'meeting' && (
+            <div
+              className="absolute top-0 left-0 right-0 h-10 bg-black/60 flex items-center justify-between gap-2 px-3 z-10 cursor-grab active:cursor-grabbing select-none"
+              onMouseDown={onZoomPopupMouseDown}
+              role="presentation"
+            >
+              <span className="text-white text-sm font-medium truncate">Meeting in progress</span>
+              <div className="flex items-center gap-1 shrink-0">
+                <button
+                  type="button"
+                  onClick={() => zoomMeetingIdRef.current && navigateToMeeting(zoomMeetingIdRef.current)}
+                  className="text-white/90 hover:text-white text-xs font-medium px-2 py-1 rounded bg-white/10 hover:bg-white/20"
+                >
+                  Return to meeting
+                </button>
+                <button
+                  type="button"
+                  onClick={handleLeaveFloatingMeeting}
+                  className="text-red-400 hover:text-red-300 text-sm font-medium"
+                >
+                  Leave
+                </button>
+              </div>
+            </div>
+          )}
+        </div>
       </div>
 
       <Toaster />

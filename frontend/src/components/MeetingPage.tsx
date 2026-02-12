@@ -20,6 +20,8 @@ interface MeetingPageProps {
   accessToken: string | null;
   userName?: string;
   onBack: () => void;
+  zoomContainerRef?: React.RefObject<HTMLDivElement | null>;
+  onMeetingJoined?: (client: unknown) => void;
 }
 
 export function MeetingPage({
@@ -27,6 +29,8 @@ export function MeetingPage({
   accessToken,
   userName = "Guest",
   onBack,
+  zoomContainerRef: externalZoomRootRef,
+  onMeetingJoined,
 }: MeetingPageProps) {
   const [meeting, setMeeting] = useState<MeetingInfo | null>(null);
   const [loading, setLoading] = useState(true);
@@ -47,7 +51,8 @@ export function MeetingPage({
     try {
       const client = zoomClientRef.current;
       if (client && typeof client.leaveMeeting === "function") {
-        await client.leaveMeeting();
+        const leave = client.leaveMeeting as (opts?: { confirm?: boolean }) => Promise<unknown>;
+        await leave.call(client, { confirm: false });
       }
       const ZoomMtgEmbedded = (await import("@zoom/meetingsdk/embedded")).default;
       ZoomMtgEmbedded.destroyClient?.();
@@ -61,14 +66,19 @@ export function MeetingPage({
 
   useEffect(() => {
     return () => {
-      const client = zoomClientRef.current;
-      if (client && typeof client.leaveMeeting === "function") {
-        client.leaveMeeting().catch(() => {});
+      if (externalZoomRootRef) {
+        // Meeting is in App's floating container – do not leave/destroy on unmount
+        zoomClientRef.current = null;
+      } else {
+        const client = zoomClientRef.current;
+        if (client && typeof client.leaveMeeting === "function") {
+          client.leaveMeeting().catch(() => {});
+        }
+        zoomClientRef.current = null;
       }
-      zoomClientRef.current = null;
       previewStream?.getTracks().forEach((t) => t.stop());
     };
-  }, []);
+  }, [externalZoomRootRef]);
 
   useEffect(() => {
     if (!meeting) return;
@@ -128,7 +138,8 @@ export function MeetingPage({
   }, [meetingId]);
 
   const handleJoin = async () => {
-    if (!meeting || !zoomRootRef.current) return;
+    const zoomRoot = externalZoomRootRef?.current ?? zoomRootRef.current;
+    if (!meeting || !zoomRoot) return;
     setJoinError(null);
     previewStream?.getTracks().forEach((t) => t.stop());
     setPreviewStream(null);
@@ -155,7 +166,7 @@ export function MeetingPage({
       zoomClientRef.current = client;
 
       const initResult = await client.init({
-        zoomAppRoot: zoomRootRef.current,
+        zoomAppRoot: zoomRoot,
         language: "en-US",
         patchJsMedia: true,
         customize: {
@@ -185,6 +196,7 @@ export function MeetingPage({
       }
       setJoining(false);
       setJoined(true);
+      onMeetingJoined?.(client);
     } catch (err) {
       const msg =
         err instanceof Error
@@ -246,9 +258,17 @@ export function MeetingPage({
       <div className="flex-1 min-h-0 rounded-xl overflow-auto border border-gray-200 bg-[#1a1a1a] flex flex-col relative">
         <div
           ref={zoomRootRef}
-          className="flex-1 w-full min-h-[480px] h-full relative"
+          className={`flex-1 w-full min-h-[480px] h-full relative ${externalZoomRootRef && joined ? "hidden" : ""}`}
           style={{ minHeight: "60vh" }}
         />
+        {externalZoomRootRef && joined && (
+          <div className="flex-1 flex flex-col items-center justify-center gap-4 p-6 text-white/70 text-sm text-center">
+            <p>Meeting is in the floating window. You can go to other pages and keep the call.</p>
+            <Button variant="outline" size="sm" onClick={leaveMeetingAndBack} className="border-red-500/50 text-red-400 hover:bg-red-500/10 hover:text-red-300">
+              Leave
+            </Button>
+          </div>
+        )}
         {!joined && !joining && !joinError && (
           <div className="absolute inset-0 z-10 flex flex-col bg-[#1a1a1a] p-4">
             <p className="text-sm text-white/80 text-center mb-2">Check your camera and microphone before joining</p>
