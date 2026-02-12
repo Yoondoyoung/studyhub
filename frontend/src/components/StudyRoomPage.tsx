@@ -32,18 +32,46 @@ interface Group {
 interface StudyRoomPageProps {
   groupId: string;
   accessToken: string;
+  currentUserId: string;
   onBack: () => void;
   onLeaveRoom?: () => void;
 }
 
 const auth = (token: string) => ({ Authorization: `Bearer ${token}` });
+const buildWsUrl = (token: string) => {
+  const base = apiBase.replace(/^http/, 'ws');
+  return `${base}/ws?token=${encodeURIComponent(token)}`;
+};
 
-export function StudyRoomPage({ groupId, accessToken, onBack, onLeaveRoom }: StudyRoomPageProps) {
+interface RoomMessage {
+  id: string;
+  clientId?: string | null;
+  roomId: string;
+  senderId: string;
+  senderName: string;
+  content: string;
+  createdAt: string;
+  pending?: boolean;
+}
+
+export function StudyRoomPage({
+  groupId,
+  accessToken,
+  currentUserId,
+  onBack,
+  onLeaveRoom
+}: StudyRoomPageProps) {
   const [group, setGroup] = useState<Group | null>(null);
   const [loading, setLoading] = useState(true);
   const [presence, setPresence] = useState<Participant[]>([]);
   const [leaveDialogOpen, setLeaveDialogOpen] = useState(false);
   const joinedRef = useRef(false);
+  const [chatMessages, setChatMessages] = useState<RoomMessage[]>([]);
+  const [chatInput, setChatInput] = useState('');
+  const [socketReady, setSocketReady] = useState(false);
+  const chatScrollRef = useRef<HTMLDivElement | null>(null);
+  const chatAutoScrollRef = useRef(true);
+  const socketRef = useRef<WebSocket | null>(null);
 
   // Fetch room details
   useEffect(() => {
@@ -81,6 +109,77 @@ export function StudyRoomPage({ groupId, accessToken, onBack, onLeaveRoom }: Stu
     return () => { cancelled = true; };
   }, [groupId, accessToken]);
 
+  // Fetch room chat history
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      try {
+        const res = await fetch(`${apiBase}/study-groups/${groupId}/chat`, {
+          headers: auth(accessToken),
+        });
+        const data = await res.json();
+        if (!cancelled) setChatMessages(data.messages || []);
+      } catch (e) {
+        if (!cancelled) console.error('Failed to fetch room chat', e);
+      }
+    })();
+    return () => { cancelled = true; };
+  }, [groupId, accessToken]);
+
+  // WebSocket: join room + receive messages
+  useEffect(() => {
+    const socket = new WebSocket(buildWsUrl(accessToken));
+    socketRef.current = socket;
+    setSocketReady(false);
+
+    socket.onopen = () => {
+      setSocketReady(true);
+      socket.send(JSON.stringify({ type: 'room:join', roomId: groupId }));
+    };
+
+    socket.onclose = () => {
+      setSocketReady(false);
+    };
+
+    socket.onmessage = (event) => {
+      try {
+        const payload = JSON.parse(event.data);
+        if (payload?.type !== 'room:message' || !payload?.message) return;
+        const message = payload.message as RoomMessage;
+        if (message.roomId !== groupId) return;
+        setChatMessages((prev) => {
+          if (message.clientId) {
+            const index = prev.findIndex((item) => item.clientId === message.clientId);
+            if (index !== -1) {
+              const next = [...prev];
+              next[index] = { ...message, pending: false };
+              return next;
+            }
+          }
+          return [...prev, message];
+        });
+      } catch (error) {
+        console.error('Failed to parse room chat message:', error);
+      }
+    };
+
+    return () => {
+      try {
+        socket.send(JSON.stringify({ type: 'room:leave', roomId: groupId }));
+      } catch (_) {}
+      socket.close();
+      socketRef.current = null;
+    };
+  }, [groupId, accessToken]);
+
+  useEffect(() => {
+    const container = chatScrollRef.current;
+    if (!container) return;
+    if (chatAutoScrollRef.current) {
+      container.scrollTop = container.scrollHeight;
+    }
+  }, [chatMessages]);
+
   // Poll presence list
   useEffect(() => {
     const fetchPresence = async () => {
@@ -112,6 +211,32 @@ export function StudyRoomPage({ groupId, accessToken, onBack, onLeaveRoom }: Stu
     }
     onLeaveRoom?.();
     onBack();
+  };
+
+  const handleSendMessage = () => {
+    if (!chatInput.trim() || !socketRef.current || !socketReady) return;
+    const clientId = crypto.randomUUID();
+    const content = chatInput.trim();
+    const tempMessage: RoomMessage = {
+      id: clientId,
+      clientId,
+      roomId: groupId,
+      senderId: currentUserId,
+      senderName: 'You',
+      content,
+      createdAt: new Date().toISOString(),
+      pending: true,
+    };
+    setChatMessages((prev) => [...prev, tempMessage]);
+    socketRef.current.send(
+      JSON.stringify({
+        type: 'room:send',
+        roomId: groupId,
+        content,
+        clientId,
+      })
+    );
+    setChatInput('');
   };
 
   if (loading) {
@@ -169,12 +294,11 @@ export function StudyRoomPage({ groupId, accessToken, onBack, onLeaveRoom }: Stu
 
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
         {/* Left: Google Map */}
-        <div className="lg:col-span-2 rounded-lg overflow-hidden border bg-gray-100 min-h-[280px]">
+        <div className="lg:col-span-2 rounded-lg overflow-hidden border bg-gray-100 h-[520px] min-h-[280px]">
           <iframe
             title="Meeting location"
             src={mapSrc}
-            width="100%"
-            height="280"
+            className="w-full h-full"
             style={{ border: 0 }}
             allowFullScreen
             loading="lazy"
@@ -182,29 +306,104 @@ export function StudyRoomPage({ groupId, accessToken, onBack, onLeaveRoom }: Stu
           />
         </div>
 
-        {/* Right: Users in room */}
-        <Card className="lg:col-span-1">
-          <CardHeader className="pb-2">
-            <CardTitle className="text-base flex items-center gap-2">
-              <Users className="size-4" />
-              In this room ({presence.length})
-            </CardTitle>
-          </CardHeader>
-          <CardContent>
-            <ul className="space-y-2">
-              {presence.length === 0 ? (
-                <li className="text-sm text-muted-foreground">No one here yet</li>
-              ) : (
-                presence.map((p) => (
-                  <li key={p.id} className="text-sm font-medium flex items-center gap-2">
-                    <span className="size-2 rounded-full bg-teal-500" />
-                    {p.username}
-                  </li>
-                ))
-              )}
-            </ul>
-          </CardContent>
-        </Card>
+        {/* Right: Users + chat */}
+        <div className="lg:col-span-1 h-[520px] flex flex-col gap-4">
+          <Card className="flex-none">
+            <CardHeader className="pb-2">
+              <CardTitle className="text-base flex items-center gap-2">
+                <Users className="size-4" />
+                In this room ({presence.length})
+              </CardTitle>
+            </CardHeader>
+            <CardContent>
+              <ul className="space-y-2">
+                {presence.length === 0 ? (
+                  <li className="text-sm text-muted-foreground">No one here yet</li>
+                ) : (
+                  presence.map((p) => (
+                    <li key={p.id} className="text-sm font-medium flex items-center gap-2">
+                      <span className="size-2 rounded-full bg-teal-500" />
+                      {p.username}
+                    </li>
+                  ))
+                )}
+              </ul>
+            </CardContent>
+          </Card>
+
+          <Card className="flex-1 flex flex-col overflow-hidden min-h-[320px]">
+            <CardHeader className="pb-2">
+              <CardTitle className="text-base flex items-center justify-between">
+                <span>Room chat</span>
+                <span className="text-xs text-muted-foreground">
+                  {socketReady ? 'Live' : 'Connecting...'}
+                </span>
+              </CardTitle>
+            </CardHeader>
+            <CardContent className="flex-1 min-h-0 flex flex-col gap-3">
+              <div
+                ref={chatScrollRef}
+                className="flex-1 min-h-0 overflow-y-auto space-y-2 rounded-lg border border-gray-100 bg-white/80 p-3"
+                onScroll={(event) => {
+                  const target = event.currentTarget;
+                  const distanceFromBottom =
+                    target.scrollHeight - target.scrollTop - target.clientHeight;
+                  chatAutoScrollRef.current = distanceFromBottom < 32;
+                }}
+              >
+                {chatMessages.length === 0 ? (
+                  <div className="h-full flex items-center justify-center text-xs text-gray-400">
+                    No messages yet. Say hi!
+                  </div>
+                ) : (
+                  chatMessages.map((message) => {
+                    const isMine = message.senderId === currentUserId;
+                    return (
+                      <div
+                        key={message.id}
+                        className={`flex ${isMine ? 'justify-end' : 'justify-start'}`}
+                      >
+                        <div
+                          className={`max-w-[80%] rounded-2xl px-3 py-2 text-xs ${
+                            isMine ? 'bg-emerald-500 text-white' : 'bg-gray-100 text-gray-700'
+                          } ${message.pending ? 'opacity-70' : ''}`}
+                        >
+                          {!isMine && (
+                            <p className="text-[10px] font-semibold mb-1">{message.senderName}</p>
+                          )}
+                          <p className="whitespace-pre-wrap">{message.content}</p>
+                          <p className="mt-1 text-[10px] opacity-70">
+                            {new Date(message.createdAt).toLocaleTimeString('en-US', {
+                              hour: '2-digit',
+                              minute: '2-digit'
+                            })}
+                          </p>
+                        </div>
+                      </div>
+                    );
+                  })
+                )}
+              </div>
+              <div className="flex items-center gap-2">
+                <input
+                  className="flex-1 h-9 rounded-md border border-input bg-transparent px-3 text-xs shadow-sm focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
+                  placeholder="Type a message..."
+                  value={chatInput}
+                  onChange={(event) => setChatInput(event.target.value)}
+                  onKeyDown={(event) => {
+                    if (event.key === 'Enter') {
+                      event.preventDefault();
+                      handleSendMessage();
+                    }
+                  }}
+                />
+                <Button size="sm" onClick={handleSendMessage} disabled={!chatInput.trim() || !socketReady}>
+                  Send
+                </Button>
+              </div>
+            </CardContent>
+          </Card>
+        </div>
       </div>
 
       {/* Below map: Room info */}

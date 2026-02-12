@@ -47,6 +47,7 @@ const anonSupabase = createClient(SUPABASE_URL, SUPABASE_ANON_KEY, {
 
 const KV_TABLE = "kv_store_ba522478";
 const DM_MESSAGE_LIMIT = 200;
+const ROOM_MESSAGE_LIMIT = 200;
 
 const kvSet = async (key, value) => {
   const { error } = await serviceSupabase.from(KV_TABLE).upsert({ key, value });
@@ -100,6 +101,15 @@ const getConversationId = (userId, friendId) =>
 
 const getDmThread = async (userId, friendId) => {
   const key = `dm:${getConversationId(userId, friendId)}`;
+  const thread = await kvGet(key);
+  if (!thread || !Array.isArray(thread.messages)) {
+    return { key, messages: [] };
+  }
+  return { key, messages: thread.messages };
+};
+
+const getRoomChat = async (roomId) => {
+  const key = `room-chat:${roomId}`;
   const thread = await kvGet(key);
   if (!thread || !Array.isArray(thread.messages)) {
     return { key, messages: [] };
@@ -338,6 +348,20 @@ app.get("/study-groups/:id/presence", async (req, res) => {
     if (!group) return res.status(404).json({ error: "Group not found" });
     const presence = (await kvGet(`room-presence:${groupId}`)) || { users: [] };
     return res.json({ presence: presence.users });
+  } catch (err) {
+    if (String(err?.message).includes("Unauthorized"))
+      return res.status(401).json({ error: "Unauthorized" });
+    return res.status(500).json({ error: String(err?.message ?? err) });
+  }
+});
+
+app.get("/study-groups/:id/chat", async (req, res) => {
+  try {
+    await requireUser(req);
+    const roomId = String(req.params.id || "");
+    if (!roomId) return res.status(400).json({ error: "Room id required" });
+    const { messages } = await getRoomChat(roomId);
+    return res.json({ messages });
   } catch (err) {
     if (String(err?.message).includes("Unauthorized"))
       return res.status(401).json({ error: "Unauthorized" });
@@ -1627,6 +1651,8 @@ app.get("/dm/:friendId", async (req, res) => {
 const server = http.createServer(app);
 const wss = new WebSocketServer({ server });
 const socketsByUser = new Map();
+const roomSockets = new Map();
+const roomsBySocket = new Map();
 
 const addSocket = (userId, socket) => {
   const sockets = socketsByUser.get(userId) ?? new Set();
@@ -1652,6 +1678,40 @@ const sendToUser = (userId, payload) => {
   });
 };
 
+const joinRoom = (roomId, socket) => {
+  if (!roomId) return;
+  const sockets = roomSockets.get(roomId) ?? new Set();
+  sockets.add(socket);
+  roomSockets.set(roomId, sockets);
+  const rooms = roomsBySocket.get(socket) ?? new Set();
+  rooms.add(roomId);
+  roomsBySocket.set(socket, rooms);
+};
+
+const leaveRoom = (roomId, socket) => {
+  const sockets = roomSockets.get(roomId);
+  if (sockets) {
+    sockets.delete(socket);
+    if (sockets.size === 0) roomSockets.delete(roomId);
+  }
+  const rooms = roomsBySocket.get(socket);
+  if (rooms) {
+    rooms.delete(roomId);
+    if (rooms.size === 0) roomsBySocket.delete(socket);
+  }
+};
+
+const sendToRoom = (roomId, payload) => {
+  const sockets = roomSockets.get(roomId);
+  if (!sockets) return;
+  const message = JSON.stringify(payload);
+  sockets.forEach((socket) => {
+    if (socket.readyState === 1) {
+      socket.send(message);
+    }
+  });
+};
+
 wss.on("connection", async (socket, req) => {
   try {
     const url = new URL(req.url ?? "", "http://localhost");
@@ -1661,38 +1721,86 @@ wss.on("connection", async (socket, req) => {
     }
     const token = url.searchParams.get("token") ?? "";
     const user = await getUserFromToken(token);
+    const userProfile = await kvGet(`user:${user.id}`);
     socket.userId = user.id;
+    socket.userName =
+      userProfile?.username ||
+      user.user_metadata?.username ||
+      user.email ||
+      "User";
     addSocket(user.id, socket);
 
     socket.on("message", async (data) => {
       try {
         const raw = typeof data === "string" ? data : data.toString();
         const payload = JSON.parse(raw);
-        if (payload?.type !== "chat:send") return;
-        const recipientId = String(payload?.recipientId ?? "");
-        const content = String(payload?.content ?? "").trim();
-        const clientId = payload?.clientId ? String(payload.clientId) : null;
-        if (!recipientId || !content) return;
-        if (!socket.userId) return;
-        if (recipientId === socket.userId) return;
+        if (payload?.type === "chat:send") {
+          const recipientId = String(payload?.recipientId ?? "");
+          const content = String(payload?.content ?? "").trim();
+          const clientId = payload?.clientId ? String(payload.clientId) : null;
+          if (!recipientId || !content) return;
+          if (!socket.userId) return;
+          if (recipientId === socket.userId) return;
 
-        const message = {
-          id: crypto.randomUUID(),
-          clientId,
-          senderId: socket.userId,
-          recipientId,
-          content,
-          createdAt: new Date().toISOString(),
-        };
+          const message = {
+            id: crypto.randomUUID(),
+            clientId,
+            senderId: socket.userId,
+            recipientId,
+            content,
+            createdAt: new Date().toISOString(),
+          };
 
-        const { key, messages } = await getDmThread(socket.userId, recipientId);
-        const nextMessages = [...messages, message];
-        const trimmed = nextMessages.slice(-DM_MESSAGE_LIMIT);
-        await kvSet(key, { messages: trimmed });
+          const { key, messages } = await getDmThread(socket.userId, recipientId);
+          const nextMessages = [...messages, message];
+          const trimmed = nextMessages.slice(-DM_MESSAGE_LIMIT);
+          await kvSet(key, { messages: trimmed });
 
-        const outgoing = { type: "chat:message", message };
-        sendToUser(socket.userId, outgoing);
-        sendToUser(recipientId, outgoing);
+          const outgoing = { type: "chat:message", message };
+          sendToUser(socket.userId, outgoing);
+          sendToUser(recipientId, outgoing);
+          return;
+        }
+
+        if (payload?.type === "room:join") {
+          const roomId = String(payload?.roomId ?? "");
+          if (!roomId) return;
+          joinRoom(roomId, socket);
+          return;
+        }
+
+        if (payload?.type === "room:leave") {
+          const roomId = String(payload?.roomId ?? "");
+          if (!roomId) return;
+          leaveRoom(roomId, socket);
+          return;
+        }
+
+        if (payload?.type === "room:send") {
+          const roomId = String(payload?.roomId ?? "");
+          const content = String(payload?.content ?? "").trim();
+          const clientId = payload?.clientId ? String(payload.clientId) : null;
+          if (!roomId || !content) return;
+          if (!socket.userId) return;
+
+          const message = {
+            id: crypto.randomUUID(),
+            clientId,
+            roomId,
+            senderId: socket.userId,
+            senderName: socket.userName,
+            content,
+            createdAt: new Date().toISOString(),
+          };
+
+          const { key, messages } = await getRoomChat(roomId);
+          const nextMessages = [...messages, message];
+          const trimmed = nextMessages.slice(-ROOM_MESSAGE_LIMIT);
+          await kvSet(key, { messages: trimmed });
+
+          sendToRoom(roomId, { type: "room:message", message });
+          return;
+        }
       } catch (error) {
         console.error("WebSocket message error:", error);
       }
@@ -1700,6 +1808,10 @@ wss.on("connection", async (socket, req) => {
 
     socket.on("close", () => {
       if (socket.userId) removeSocket(socket.userId, socket);
+      const rooms = roomsBySocket.get(socket);
+      if (rooms) {
+        rooms.forEach((roomId) => leaveRoom(roomId, socket));
+      }
     });
   } catch (error) {
     console.error("WebSocket connection error:", error);

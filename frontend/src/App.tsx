@@ -501,6 +501,7 @@ export default function App() {
             <StudyRoomPage
               groupId={currentGroupId}
               accessToken={accessToken}
+              currentUserId={user?.id || ''}
               onBack={() => navigateTo('study-groups')}
               onLeaveRoom={() => setRoomUserIsIn(null)}
             />
