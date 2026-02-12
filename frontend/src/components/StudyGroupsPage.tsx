@@ -21,6 +21,7 @@ interface StudyGroup {
   maxParticipants: number;
   participants: string[];
   applicants: string[];
+  applicantsWithNames?: { id: string; username: string }[];
   studyType?: string;
   duration?: string;
   meetingId?: string;
@@ -660,8 +661,6 @@ export function StudyGroupsPage({ accessToken, userId, currentUserUsername, room
             const isMember = group.participants.includes(userId);
             const hasApplied = group.applicants.includes(userId);
             const isFull = group.participants.length >= group.maxParticipants;
-            const meetingStart = new Date(`${group.date}T${group.time || '00:00'}`);
-            const isMeetingStarted = new Date() >= meetingStart;
             const colorScheme = pastelColors[index % pastelColors.length];
             const icon = getSubjectIcon(group.topic);
 
@@ -739,10 +738,14 @@ export function StudyGroupsPage({ accessToken, userId, currentUserUsername, room
                       <p className="text-sm font-semibold text-gray-900">
                         Pending Requests ({group.applicants.length})
                       </p>
-                      {group.applicants.slice(0, 2).map((applicantId) => (
+                      {group.applicants.slice(0, 2).map((applicantId) => {
+                        const applicantInfo = group.applicantsWithNames?.find(
+                          (item) => item.id === applicantId
+                        );
+                        return (
                         <div key={applicantId} className="flex items-center justify-between bg-white/60 rounded-lg p-2">
                           <span className="text-sm text-gray-700 truncate">
-                            User {applicantId.slice(0, 8)}...
+                            {applicantInfo?.username || `User ${applicantId.slice(0, 8)}...`}
                           </span>
                           <div className="flex gap-1">
                             <Button
@@ -763,7 +766,8 @@ export function StudyGroupsPage({ accessToken, userId, currentUserUsername, room
                             </Button>
                           </div>
                         </div>
-                      ))}
+                      );
+                      })}
                     </div>
                   )}
 
@@ -780,7 +784,6 @@ export function StudyGroupsPage({ accessToken, userId, currentUserUsername, room
                   {!group.meetingId && isMeetingStarted && (isHost || isMember || !isFull) && (
                     <Button
                       className="w-full bg-teal-600 text-white hover:bg-teal-700 font-semibold"
-                      disabled={isFull && !isHost && !isMember}
                       onClick={() => onJoinRoom(group.id)}
                     >
                       <Video className="size-4 mr-2" />
@@ -788,19 +791,13 @@ export function StudyGroupsPage({ accessToken, userId, currentUserUsername, room
                     </Button>
                   )}
 
-                  {!isMeetingStarted && !isHost && !isMember && (
+                  {!isHost && !isMember && (
                     <Button
                       className="w-full bg-gray-900 text-white hover:bg-gray-800 font-semibold"
                       disabled={hasApplied || isFull}
                       onClick={() => handleApply(group.id)}
                     >
                       {hasApplied ? '⏳ Pending' : isFull ? '🔒 Full' : 'Apply Now'}
-                    </Button>
-                  )}
-
-                  {!isMeetingStarted && isMember && !isHost && (
-                    <Button className="w-full bg-green-600 text-white hover:bg-green-700 font-semibold" disabled>
-                      Accepted
                     </Button>
                   )}
 

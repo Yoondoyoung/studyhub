@@ -12,6 +12,8 @@ import { createClient } from "@supabase/supabase-js";
 import multer from "multer";
 import OpenAI from "openai";
 import sharp from "sharp";
+import http from "http";
+import { WebSocketServer } from "ws";
 import { createRequire } from "module";
 
 const require = createRequire(import.meta.url);
@@ -51,6 +53,8 @@ const anonSupabase = createClient(SUPABASE_URL, SUPABASE_ANON_KEY, {
 });
 
 const KV_TABLE = "kv_store_ba522478";
+const DM_MESSAGE_LIMIT = 200;
+const ROOM_MESSAGE_LIMIT = 200;
 
 const kvSet = async (key, value) => {
   const { error } = await serviceSupabase.from(KV_TABLE).upsert({ key, value });
@@ -86,13 +90,38 @@ const toNumber = (value, fallback = 0) => {
   return Number.isFinite(num) ? num : fallback;
 };
 
-const requireUser = async (req) => {
-  const authHeader = req.header("Authorization") || "";
-  const token = authHeader.startsWith("Bearer ") ? authHeader.slice(7) : "";
+const getUserFromToken = async (token) => {
   if (!token) throw new Error("Unauthorized");
   const { data, error } = await serviceSupabase.auth.getUser(token);
   if (error || !data.user) throw new Error("Unauthorized");
   return data.user;
+};
+
+const requireUser = async (req) => {
+  const authHeader = req.header("Authorization") || "";
+  const token = authHeader.startsWith("Bearer ") ? authHeader.slice(7) : "";
+  return getUserFromToken(token);
+};
+
+const getConversationId = (userId, friendId) =>
+  [userId, friendId].sort().join(":");
+
+const getDmThread = async (userId, friendId) => {
+  const key = `dm:${getConversationId(userId, friendId)}`;
+  const thread = await kvGet(key);
+  if (!thread || !Array.isArray(thread.messages)) {
+    return { key, messages: [] };
+  }
+  return { key, messages: thread.messages };
+};
+
+const getRoomChat = async (roomId) => {
+  const key = `room-chat:${roomId}`;
+  const thread = await kvGet(key);
+  if (!thread || !Array.isArray(thread.messages)) {
+    return { key, messages: [] };
+  }
+  return { key, messages: thread.messages };
 };
 
 app.post("/auth/signup", async (req, res) => {
@@ -287,7 +316,15 @@ app.get("/study-groups", async (_req, res) => {
       if (applyNoShowCleanup(group)) await kvSet(`study-group:${group.id}`, group);
       const hostProfile = group.hostId ? await kvGet(`user:${group.hostId}`) : null;
       const hostUsername = hostProfile?.username ?? hostProfile?.email ?? (group.hostId?.slice(0, 8) ?? "—");
-      groups.push({ ...group, hostUsername });
+      const applicantsWithNames = [];
+      for (const id of group.applicants || []) {
+        const profile = await kvGet(`user:${id}`);
+        applicantsWithNames.push({
+          id,
+          username: profile?.username ?? profile?.email ?? id.slice(0, 8),
+        });
+      }
+      groups.push({ ...group, hostUsername, applicantsWithNames });
     }
     return res.json({ groups });
   } catch (err) {
@@ -320,12 +357,34 @@ app.get("/study-groups/:id", async (req, res) => {
 
 app.get("/study-groups/:id/presence", async (req, res) => {
   try {
-    await requireUser(req);
+    const user = await requireUser(req);
     const groupId = req.params.id;
     const group = await kvGet(`study-group:${groupId}`);
     if (!group) return res.status(404).json({ error: "Group not found" });
+    if (!group.participants?.includes(user.id)) {
+      return res.status(403).json({ error: "Not accepted" });
+    }
     const presence = (await kvGet(`room-presence:${groupId}`)) || { users: [] };
     return res.json({ presence: presence.users });
+  } catch (err) {
+    if (String(err?.message).includes("Unauthorized"))
+      return res.status(401).json({ error: "Unauthorized" });
+    return res.status(500).json({ error: String(err?.message ?? err) });
+  }
+});
+
+app.get("/study-groups/:id/chat", async (req, res) => {
+  try {
+    const user = await requireUser(req);
+    const roomId = String(req.params.id || "");
+    if (!roomId) return res.status(400).json({ error: "Room id required" });
+    const group = await kvGet(`study-group:${roomId}`);
+    if (!group) return res.status(404).json({ error: "Group not found" });
+    if (!group.participants?.includes(user.id)) {
+      return res.status(403).json({ error: "Not accepted" });
+    }
+    const { messages } = await getRoomChat(roomId);
+    return res.json({ messages });
   } catch (err) {
     if (String(err?.message).includes("Unauthorized"))
       return res.status(401).json({ error: "Unauthorized" });
@@ -340,14 +399,9 @@ app.post("/study-groups/:id/presence", async (req, res) => {
     const group = await kvGet(`study-group:${groupId}`);
     if (!group) return res.status(404).json({ error: "Group not found" });
     const participantIds = group.participants || [];
-    const hasSeats = participantIds.length < (group.maxParticipants || 0);
     const isParticipant = participantIds.includes(user.id);
-    if (!isParticipant && !hasSeats)
-      return res.status(403).json({ error: "Room is full" });
-    if (!isParticipant && hasSeats) {
-      group.participants = group.participants || [];
-      group.participants.push(user.id);
-      await kvSet(`study-group:${groupId}`, group);
+    if (!isParticipant) {
+      return res.status(403).json({ error: "Not accepted" });
     }
     const profile = await kvGet(`user:${user.id}`);
     const username = profile?.username ?? profile?.email ?? user.id?.slice(0, 8) ?? "User";
@@ -787,7 +841,7 @@ app.get("/ai/sessions/:id", async (req, res) => {
     const user = await requireUser(req);
     const sessionId = req.params.id;
     const session = await kvGet(`ai-session:${user.id}:${sessionId}`);
-
+    
     if (!session) {
       return res.status(404).json({ error: "Session not found" });
     }
@@ -800,6 +854,7 @@ app.get("/ai/sessions/:id", async (req, res) => {
   }
 });
 
+// Get friend's shared todos
 app.get("/friends/:id/todos", async (req, res) => {
   try {
     await requireUser(req);
@@ -814,25 +869,6 @@ app.get("/friends/:id/todos", async (req, res) => {
     return res.json({ todos: sharedTodos });
   } catch {
     return res.status(401).json({ error: "Unauthorized" });
-  }
-});
-
-// AI Study Assistant - File Upload
-app.post("/ai/upload", upload.single("file"), async (req, res) => {
-  try {
-    const user = await requireUser(req);
-    const sessionId = req.params.id;
-    const session = await kvGet(`ai-session:${user.id}:${sessionId}`);
-    
-    if (!session) {
-      return res.status(404).json({ error: "Session not found" });
-    }
-
-    return res.json({ session });
-  } catch (err) {
-    if (String(err?.message).includes("Unauthorized"))
-      return res.status(401).json({ error: "Unauthorized" });
-    return res.status(500).json({ error: String(err?.message ?? err) });
   }
 });
 
@@ -1427,6 +1463,7 @@ app.post("/ai/sessions/:id/generate-quiz", async (req, res) => {
   try {
     const user = await requireUser(req);
     const sessionId = req.params.id;
+    const { count = 10, difficulty = "medium" } = req.body || {};
 
     const session = await kvGet(`ai-session:${user.id}:${sessionId}`);
     if (!session) {
@@ -1441,8 +1478,17 @@ app.post("/ai/sessions/:id/generate-quiz", async (req, res) => {
         .join("\n\n");
     }
 
+    // Difficulty-specific instructions
+    const difficultyInstructions = {
+      easy: "Make the questions straightforward and test basic understanding of key terms and main concepts. Use simple language.",
+      medium: "Make the questions moderately challenging, testing both understanding and application of concepts. Balance between recall and analysis.",
+      hard: "Make the questions challenging, requiring deep understanding, critical thinking, and ability to apply concepts in new contexts. Include complex scenarios."
+    };
+
+    const difficultyInstruction = difficultyInstructions[difficulty.toLowerCase()] || difficultyInstructions.medium;
+
     const quizPrompt = filesContext
-      ? `Based on the following study materials, generate exactly 10 multiple-choice questions. Each question should test understanding of key concepts from the materials.
+      ? `Based on the following study materials, generate exactly ${count} multiple-choice questions. Each question should test understanding of key concepts from the materials.
 
 Study Materials:
 ${filesContext}
@@ -1461,13 +1507,13 @@ Generate the questions in this EXACT JSON format (respond ONLY with valid JSON, 
 }
 
 Requirements:
-- Exactly 10 questions
+- Exactly ${count} questions
 - Each question has 4 options (A, B, C, D)
 - correctAnswer is the index (0, 1, 2, or 3)
 - Questions should cover different topics from the materials
-- Make questions challenging but fair
+- Difficulty level: ${difficulty.toUpperCase()} - ${difficultyInstruction}
 - Always respond in English only`
-      : `Generate 10 general knowledge multiple-choice questions in this EXACT JSON format (respond ONLY with valid JSON):
+      : `Generate ${count} general knowledge multiple-choice questions in this EXACT JSON format (respond ONLY with valid JSON):
 {
   "questions": [
     {
@@ -1478,7 +1524,9 @@ Requirements:
       "explanation": "Why this is correct"
     }
   ]
-}`;
+}
+
+Difficulty: ${difficulty.toUpperCase()} - ${difficultyInstruction}`;
 
     console.log("Generating quiz questions...");
     const completion = await openai.chat.completions.create({
@@ -1504,6 +1552,12 @@ Requirements:
     }
 
     console.log(`Generated ${quizData.questions?.length || 0} questions`);
+
+    // Save quiz to session
+    session.quizData = quizData;
+    session.quizSettings = { count, difficulty };
+    session.updatedAt = new Date().toISOString();
+    await kvSet(`ai-session:${user.id}:${sessionId}`, session);
 
     return res.json({
       success: true,
@@ -1542,6 +1596,392 @@ app.delete("/ai/sessions/:id", async (req, res) => {
     return res.json({ success: true });
   } catch (err) {
     console.error("Delete session error:", err);
+    if (String(err?.message).includes("Unauthorized"))
+      return res.status(401).json({ error: "Unauthorized" });
+    return res.status(500).json({ error: String(err?.message ?? err) });
+  }
+});
+
+// ============================================
+// Group Quiz APIs
+// ============================================
+
+// Upload file to group quiz (max = maxParticipants)
+app.post("/study-groups/:groupId/quiz/upload", upload.single("file"), async (req, res) => {
+  try {
+    const user = await requireUser(req);
+    const { groupId } = req.params;
+    const file = req.file;
+    
+    if (!file) {
+      return res.status(400).json({ error: "No file uploaded" });
+    }
+
+    // Get group info to check max participants
+    const group = await kvGet(`study-group:${groupId}`);
+    if (!group) {
+      return res.status(404).json({ error: "Group not found" });
+    }
+
+    // Get or create quiz data for this group
+    let quizSession = await kvGet(`group-quiz:${groupId}`);
+    if (!quizSession) {
+      quizSession = {
+        groupId,
+        files: [],
+        quiz: null,
+        answers: {}, // userId -> [answers]
+        createdAt: new Date().toISOString(),
+      };
+    }
+
+    // Check file limit
+    if (quizSession.files.length >= group.maxParticipants) {
+      return res.status(400).json({ error: `Maximum ${group.maxParticipants} files allowed` });
+    }
+
+    // Process file based on type
+    const fileId = crypto.randomUUID();
+    const fileName = file.originalname;
+    const fileType = file.mimetype;
+    let content = "";
+
+    try {
+      if (fileType === 'application/pdf') {
+        const pdfData = await pdfParse(file.buffer);
+        content = pdfData.text;
+      } else if (fileType.startsWith('image/')) {
+        const resizedBuffer = await sharp(file.buffer).resize(800).toBuffer();
+        const base64Image = resizedBuffer.toString('base64');
+        const imageUrl = `data:${fileType};base64,${base64Image}`;
+        
+        const visionResponse = await openai.chat.completions.create({
+          model: "gpt-4o-mini",
+          messages: [{
+            role: "user",
+            content: [
+              { type: "text", text: "Extract all text from this image. If there's no text, describe what you see." },
+              { type: "image_url", image_url: { url: imageUrl } }
+            ]
+          }],
+          max_tokens: 1000,
+        });
+        content = visionResponse.choices[0].message.content || "";
+      } else if (fileType.startsWith('audio/')) {
+        const audioTranscription = await openai.audio.transcriptions.create({
+          file: new File([file.buffer], fileName, { type: fileType }),
+          model: "whisper-1",
+        });
+        content = audioTranscription.text;
+      } else {
+        content = file.buffer.toString('utf-8');
+      }
+    } catch (err) {
+      console.error("File processing error:", err);
+      return res.status(500).json({ error: "Failed to process file" });
+    }
+
+    // Add file to quiz session
+    const fileData = {
+      id: fileId,
+      fileName,
+      fileType,
+      content,
+      uploadedBy: user.id,
+      uploadedAt: new Date().toISOString(),
+    };
+
+    quizSession.files.push(fileData);
+    quizSession.updatedAt = new Date().toISOString();
+    await kvSet(`group-quiz:${groupId}`, quizSession);
+
+    return res.json({
+      success: true,
+      file: { id: fileId, fileName, fileType },
+      fileCount: quizSession.files.length,
+      maxFiles: group.maxParticipants,
+    });
+  } catch (err) {
+    console.error("Group quiz upload error:", err);
+    if (String(err?.message).includes("Unauthorized"))
+      return res.status(401).json({ error: "Unauthorized" });
+    return res.status(500).json({ error: String(err?.message ?? err) });
+  }
+});
+
+// Get group quiz files
+app.get("/study-groups/:groupId/quiz/files", async (req, res) => {
+  try {
+    await requireUser(req);
+    const { groupId } = req.params;
+
+    const quizSession = await kvGet(`group-quiz:${groupId}`);
+    if (!quizSession) {
+      return res.json({ files: [] });
+    }
+
+    const filesWithoutContent = quizSession.files.map(f => ({
+      id: f.id,
+      fileName: f.fileName,
+      fileType: f.fileType,
+      uploadedAt: f.uploadedAt,
+    }));
+
+    return res.json({ files: filesWithoutContent });
+  } catch (err) {
+    if (String(err?.message).includes("Unauthorized"))
+      return res.status(401).json({ error: "Unauthorized" });
+    return res.status(500).json({ error: String(err?.message ?? err) });
+  }
+});
+
+// Generate group quiz
+app.post("/study-groups/:groupId/quiz/generate", async (req, res) => {
+  try {
+    await requireUser(req);
+    const { groupId } = req.params;
+    const { count = 10, difficulty = "medium" } = req.body || {};
+
+    const quizSession = await kvGet(`group-quiz:${groupId}`);
+    if (!quizSession || !quizSession.files || quizSession.files.length === 0) {
+      return res.status(400).json({ error: "No files uploaded for this quiz" });
+    }
+
+    // Build context from files
+    const filesContext = quizSession.files
+      .map(f => `[File: ${f.fileName}]\n${f.content.substring(0, 3000)}`)
+      .join("\n\n");
+
+    const difficultyInstructions = {
+      easy: "Make the questions straightforward and test basic understanding of key terms and main concepts. Use simple language.",
+      medium: "Make the questions moderately challenging, testing both understanding and application of concepts. Balance between recall and analysis.",
+      hard: "Make the questions challenging, requiring deep understanding, critical thinking, and ability to apply concepts in new contexts. Include complex scenarios."
+    };
+
+    const difficultyInstruction = difficultyInstructions[difficulty.toLowerCase()] || difficultyInstructions.medium;
+
+    const quizPrompt = `Based on the following study materials, generate exactly ${count} multiple-choice questions. Each question should test understanding of key concepts from the materials.
+
+Study Materials:
+${filesContext}
+
+Generate the questions in this EXACT JSON format (respond ONLY with valid JSON, no additional text):
+{
+  "questions": [
+    {
+      "id": 1,
+      "question": "Question text here?",
+      "options": ["Option A", "Option B", "Option C", "Option D"],
+      "correctAnswer": 0,
+      "explanation": "Brief explanation of why this is correct"
+    }
+  ]
+}
+
+Requirements:
+- Exactly ${count} questions
+- Each question has 4 options (A, B, C, D)
+- correctAnswer is the index (0, 1, 2, or 3)
+- Questions should cover different topics from the materials
+- Difficulty level: ${difficulty.toUpperCase()} - ${difficultyInstruction}
+- Always respond in English only`;
+
+    console.log("Generating group quiz questions...");
+    const completion = await openai.chat.completions.create({
+      model: "gpt-4o-mini",
+      messages: [
+        { role: "system", content: "You are a quiz generator. Always respond with valid JSON only, no additional text. Ensure all strings are properly escaped." },
+        { role: "user", content: quizPrompt }
+      ],
+      temperature: 0.8,
+      max_tokens: 2500,
+      response_format: { type: "json_object" }
+    });
+
+    let quizData;
+    try {
+      const responseText = completion.choices[0].message.content;
+      quizData = JSON.parse(responseText);
+    } catch (parseError) {
+      console.error("Failed to parse quiz JSON:", parseError);
+      return res.status(500).json({ error: "Failed to generate valid quiz format" });
+    }
+
+    // Save quiz to session
+    quizSession.quiz = quizData;
+    quizSession.quizSettings = { count, difficulty };
+    quizSession.answers = {}; // Reset answers
+    quizSession.updatedAt = new Date().toISOString();
+    await kvSet(`group-quiz:${groupId}`, quizSession);
+
+    console.log(`Generated ${quizData.questions?.length || 0} questions for group ${groupId}`);
+
+    return res.json({
+      success: true,
+      quiz: quizData
+    });
+  } catch (err) {
+    console.error("Group quiz generation error:", err);
+    if (String(err?.message).includes("Unauthorized"))
+      return res.status(401).json({ error: "Unauthorized" });
+    return res.status(500).json({ error: String(err?.message ?? err) });
+  }
+});
+
+// Get group quiz
+app.get("/study-groups/:groupId/quiz", async (req, res) => {
+  try {
+    await requireUser(req);
+    const { groupId } = req.params;
+
+    const quizSession = await kvGet(`group-quiz:${groupId}`);
+    if (!quizSession || !quizSession.quiz) {
+      return res.json({ quiz: null });
+    }
+
+    return res.json({ quiz: quizSession.quiz });
+  } catch (err) {
+    if (String(err?.message).includes("Unauthorized"))
+      return res.status(401).json({ error: "Unauthorized" });
+    return res.status(500).json({ error: String(err?.message ?? err) });
+  }
+});
+
+// Submit group quiz answer
+app.post("/study-groups/:groupId/quiz/answer", async (req, res) => {
+  try {
+    const user = await requireUser(req);
+    const { groupId } = req.params;
+    const { questionId, answer } = req.body;
+
+    if (questionId === undefined || answer === undefined) {
+      return res.status(400).json({ error: "Missing questionId or answer" });
+    }
+
+    const quizSession = await kvGet(`group-quiz:${groupId}`);
+    if (!quizSession || !quizSession.quiz) {
+      return res.status(404).json({ error: "Quiz not found" });
+    }
+
+    // Initialize user answers if not exists
+    if (!quizSession.answers[user.id]) {
+      quizSession.answers[user.id] = {};
+    }
+
+    // Save answer
+    quizSession.answers[user.id][questionId] = answer;
+    quizSession.updatedAt = new Date().toISOString();
+    await kvSet(`group-quiz:${groupId}`, quizSession);
+
+    return res.json({ success: true });
+  } catch (err) {
+    if (String(err?.message).includes("Unauthorized"))
+      return res.status(401).json({ error: "Unauthorized" });
+    return res.status(500).json({ error: String(err?.message ?? err) });
+  }
+});
+
+// Get quiz completion status
+app.get("/study-groups/:groupId/quiz/completion", async (req, res) => {
+  try {
+    await requireUser(req);
+    const { groupId } = req.params;
+
+    const quizSession = await kvGet(`group-quiz:${groupId}`);
+    if (!quizSession || !quizSession.quiz) {
+      return res.json({ completed: 0, total: 0, allCompleted: false });
+    }
+
+    // Get current presence
+    const presence = await kvGet(`room-presence:${groupId}`);
+    const currentUsers = presence?.users || [];
+    const totalUsers = currentUsers.length;
+
+    if (totalUsers === 0) {
+      return res.json({ completed: 0, total: 0, allCompleted: false });
+    }
+
+    // Count how many users completed the quiz
+    const totalQuestions = quizSession.quiz.questions.length;
+    const allAnswers = quizSession.answers || {};
+    
+    let completedCount = 0;
+    currentUsers.forEach((user) => {
+      const userAnswers = allAnswers[user.id];
+      if (userAnswers && Object.keys(userAnswers).length === totalQuestions) {
+        completedCount++;
+      }
+    });
+
+    const allCompleted = completedCount === totalUsers;
+
+    return res.json({
+      completed: completedCount,
+      total: totalUsers,
+      allCompleted,
+    });
+  } catch (err) {
+    console.error("Get completion status error:", err);
+    if (String(err?.message).includes("Unauthorized"))
+      return res.status(401).json({ error: "Unauthorized" });
+    return res.status(500).json({ error: String(err?.message ?? err) });
+  }
+});
+
+// Get group quiz results (aggregate statistics)
+app.get("/study-groups/:groupId/quiz/results", async (req, res) => {
+  try {
+    await requireUser(req);
+    const { groupId } = req.params;
+
+    const quizSession = await kvGet(`group-quiz:${groupId}`);
+    if (!quizSession || !quizSession.quiz) {
+      return res.status(404).json({ error: "Quiz not found" });
+    }
+
+    const questions = quizSession.quiz.questions;
+    const allAnswers = quizSession.answers || {};
+
+    // Calculate statistics for each question
+    const results = questions.map((question) => {
+      let correctCount = 0;
+      let incorrectCount = 0;
+      let unansweredCount = 0;
+
+      const userIds = Object.keys(allAnswers);
+      
+      if (userIds.length === 0) {
+        unansweredCount = 1; // At least show something
+      } else {
+        userIds.forEach((userId) => {
+          const userAnswers = allAnswers[userId];
+          const userAnswer = userAnswers?.[question.id];
+
+          if (userAnswer === undefined || userAnswer === null) {
+            unansweredCount++;
+          } else if (userAnswer === question.correctAnswer) {
+            correctCount++;
+          } else {
+            incorrectCount++;
+          }
+        });
+      }
+
+      return {
+        questionId: question.id,
+        question: question.question,
+        options: question.options,
+        correctAnswer: question.correctAnswer,
+        explanation: question.explanation,
+        correctCount,
+        incorrectCount,
+        unansweredCount,
+      };
+    });
+
+    return res.json({ results });
+  } catch (err) {
+    console.error("Get quiz results error:", err);
     if (String(err?.message).includes("Unauthorized"))
       return res.status(401).json({ error: "Unauthorized" });
     return res.status(500).json({ error: String(err?.message ?? err) });
@@ -1694,6 +2134,20 @@ app.post("/api/meetings", async (req, res) => {
   }
 });
 
+app.get("/dm/:friendId", async (req, res) => {
+  try {
+    const user = await requireUser(req);
+    const friendId = String(req.params.friendId || "");
+    if (!friendId) return res.status(400).json({ error: "Friend id required" });
+    const { messages } = await getDmThread(user.id, friendId);
+    return res.json({ messages });
+  } catch (err) {
+    if (String(err?.message).includes("Unauthorized"))
+      return res.status(401).json({ error: "Unauthorized" });
+    return res.status(500).json({ error: String(err?.message ?? err) });
+  }
+});
+
 app.get("/api/meetings/:id", async (req, res) => {
   try {
     const meeting = await kvGet(`meeting:${req.params.id}`);
@@ -1838,7 +2292,188 @@ app.post("/api/meetings/create-zoom", async (req, res) => {
   }
 });
 
+const server = http.createServer(app);
+const wss = new WebSocketServer({ server });
+const socketsByUser = new Map();
+const roomSockets = new Map();
+const roomsBySocket = new Map();
+
+const addSocket = (userId, socket) => {
+  const sockets = socketsByUser.get(userId) ?? new Set();
+  sockets.add(socket);
+  socketsByUser.set(userId, sockets);
+};
+
+const removeSocket = (userId, socket) => {
+  const sockets = socketsByUser.get(userId);
+  if (!sockets) return;
+  sockets.delete(socket);
+  if (sockets.size === 0) socketsByUser.delete(userId);
+};
+
+const sendToUser = (userId, payload) => {
+  const sockets = socketsByUser.get(userId);
+  if (!sockets) return;
+  const message = JSON.stringify(payload);
+  sockets.forEach((socket) => {
+    if (socket.readyState === 1) {
+      socket.send(message);
+    }
+  });
+};
+
+const joinRoom = (roomId, socket) => {
+  if (!roomId) return;
+  const sockets = roomSockets.get(roomId) ?? new Set();
+  sockets.add(socket);
+  roomSockets.set(roomId, sockets);
+  const rooms = roomsBySocket.get(socket) ?? new Set();
+  rooms.add(roomId);
+  roomsBySocket.set(socket, rooms);
+};
+
+const leaveRoom = (roomId, socket) => {
+  const sockets = roomSockets.get(roomId);
+  if (sockets) {
+    sockets.delete(socket);
+    if (sockets.size === 0) roomSockets.delete(roomId);
+  }
+  const rooms = roomsBySocket.get(socket);
+  if (rooms) {
+    rooms.delete(roomId);
+    if (rooms.size === 0) roomsBySocket.delete(socket);
+  }
+};
+
+const sendToRoom = (roomId, payload) => {
+  const sockets = roomSockets.get(roomId);
+  if (!sockets) return;
+  const message = JSON.stringify(payload);
+  sockets.forEach((socket) => {
+    if (socket.readyState === 1) {
+      socket.send(message);
+    }
+  });
+};
+
+wss.on("connection", async (socket, req) => {
+  try {
+    const url = new URL(req.url ?? "", "http://localhost");
+    if (url.pathname !== "/ws") {
+      socket.close(1008, "Invalid path");
+      return;
+    }
+    const token = url.searchParams.get("token") ?? "";
+    const user = await getUserFromToken(token);
+    const userProfile = await kvGet(`user:${user.id}`);
+    socket.userId = user.id;
+    socket.userName =
+      userProfile?.username ||
+      user.user_metadata?.username ||
+      user.email ||
+      "User";
+    addSocket(user.id, socket);
+
+    socket.on("message", async (data) => {
+      try {
+        const raw = typeof data === "string" ? data : data.toString();
+        const payload = JSON.parse(raw);
+        if (payload?.type === "chat:send") {
+          const recipientId = String(payload?.recipientId ?? "");
+          const content = String(payload?.content ?? "").trim();
+          const clientId = payload?.clientId ? String(payload.clientId) : null;
+          if (!recipientId || !content) return;
+          if (!socket.userId) return;
+          if (recipientId === socket.userId) return;
+
+          const message = {
+            id: crypto.randomUUID(),
+            clientId,
+            senderId: socket.userId,
+            recipientId,
+            content,
+            createdAt: new Date().toISOString(),
+          };
+
+          const { key, messages } = await getDmThread(socket.userId, recipientId);
+          const nextMessages = [...messages, message];
+          const trimmed = nextMessages.slice(-DM_MESSAGE_LIMIT);
+          await kvSet(key, { messages: trimmed });
+
+          const outgoing = { type: "chat:message", message };
+          sendToUser(socket.userId, outgoing);
+          sendToUser(recipientId, outgoing);
+          return;
+        }
+
+        if (payload?.type === "room:join") {
+          const roomId = String(payload?.roomId ?? "");
+          if (!roomId) return;
+          const group = await kvGet(`study-group:${roomId}`);
+          if (!group || !group.participants?.includes(socket.userId)) {
+            socket.send(JSON.stringify({ type: "room:error", message: "Not accepted" }));
+            return;
+          }
+          joinRoom(roomId, socket);
+          return;
+        }
+
+        if (payload?.type === "room:leave") {
+          const roomId = String(payload?.roomId ?? "");
+          if (!roomId) return;
+          leaveRoom(roomId, socket);
+          return;
+        }
+
+        if (payload?.type === "room:send") {
+          const roomId = String(payload?.roomId ?? "");
+          const content = String(payload?.content ?? "").trim();
+          const clientId = payload?.clientId ? String(payload.clientId) : null;
+          if (!roomId || !content) return;
+          if (!socket.userId) return;
+          const group = await kvGet(`study-group:${roomId}`);
+          if (!group || !group.participants?.includes(socket.userId)) {
+            socket.send(JSON.stringify({ type: "room:error", message: "Not accepted" }));
+            return;
+          }
+
+          const message = {
+            id: crypto.randomUUID(),
+            clientId,
+            roomId,
+            senderId: socket.userId,
+            senderName: socket.userName,
+            content,
+            createdAt: new Date().toISOString(),
+          };
+
+          const { key, messages } = await getRoomChat(roomId);
+          const nextMessages = [...messages, message];
+          const trimmed = nextMessages.slice(-ROOM_MESSAGE_LIMIT);
+          await kvSet(key, { messages: trimmed });
+
+          sendToRoom(roomId, { type: "room:message", message });
+          return;
+        }
+      } catch (error) {
+        console.error("WebSocket message error:", error);
+      }
+    });
+
+    socket.on("close", () => {
+      if (socket.userId) removeSocket(socket.userId, socket);
+      const rooms = roomsBySocket.get(socket);
+      if (rooms) {
+        rooms.forEach((roomId) => leaveRoom(roomId, socket));
+      }
+    });
+  } catch (error) {
+    console.error("WebSocket connection error:", error);
+    socket.close(1008, "Unauthorized");
+  }
+});
+
 const port = Number(process.env.PORT || 8080);
-app.listen(port, () => {
+server.listen(port, () => {
   console.log(`API listening on http://localhost:${port}`);
 });

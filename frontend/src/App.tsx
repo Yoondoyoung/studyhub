@@ -616,6 +616,7 @@ export default function App() {
             <DashboardPage
               accessToken={accessToken}
               userName={user?.username || user?.email}
+              currentUserId={user?.id || ''}
             />
           )}
           {currentPage === 'study-groups' && (
@@ -632,6 +633,7 @@ export default function App() {
             <StudyRoomPage
               groupId={currentGroupId}
               accessToken={accessToken}
+              currentUserId={user?.id || ''}
               onBack={() => navigateTo('study-groups')}
               onLeaveRoom={() => setRoomUserIsIn(null)}
             />
