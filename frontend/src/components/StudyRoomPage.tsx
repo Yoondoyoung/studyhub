@@ -14,10 +14,12 @@ import {
 import { DoorOpen, Users, Upload, BookOpen, Loader2, CheckCircle, XCircle, HelpCircle, FileText } from 'lucide-react';
 import { apiBase } from '../utils/api';
 import { toast } from 'sonner';
+import { getMedalEmoji } from '../utils/medal';
 
 interface Participant {
   id: string;
   username: string;
+  medal?: string | null;
 }
 
 interface Group {
@@ -121,6 +123,11 @@ export function StudyRoomPage({
   const [currentTime, setCurrentTime] = useState(new Date());
   const [completionStatus, setCompletionStatus] = useState<{ completed: number; total: number; allCompleted: boolean }>({ completed: 0, total: 0, allCompleted: false });
   const fileInputRef = useRef<HTMLInputElement>(null);
+  
+  // Personal Timer States
+  const [isTimerRunning, setIsTimerRunning] = useState(false);
+  const [timerSeconds, setTimerSeconds] = useState(0);
+  const [timerStartTime, setTimerStartTime] = useState<number | null>(null);
 
   // Check if study time has started
   const isStudyTime = useMemo(() => {
@@ -128,6 +135,20 @@ export function StudyRoomPage({
     const meetingDateTime = new Date(`${group.date}T${group.time}`);
     return currentTime >= meetingDateTime;
   }, [group, currentTime]);
+
+  // Timer interval
+  useEffect(() => {
+    let interval: NodeJS.Timeout | undefined;
+    if (isTimerRunning && timerStartTime) {
+      interval = setInterval(() => {
+        const elapsed = Math.floor((Date.now() - timerStartTime) / 1000);
+        setTimerSeconds(elapsed);
+      }, 1000);
+    }
+    return () => {
+      if (interval) clearInterval(interval);
+    };
+  }, [isTimerRunning, timerStartTime]);
 
   // Fetch room details
   useEffect(() => {
@@ -484,7 +505,63 @@ export function StudyRoomPage({
     }
   };
 
+  const startRoomTimer = async () => {
+    try {
+      await fetch(`${apiBase}/study/timer/start`, {
+        method: 'POST',
+        headers: {
+          ...auth(accessToken),
+          'Content-Type': 'application/json',
+        },
+      });
+      setIsTimerRunning(true);
+      setTimerStartTime(Date.now());
+      setTimerSeconds(0);
+      toast.success('⏱️ Timer started!');
+    } catch (error) {
+      console.error('Failed to start timer:', error);
+      toast.error('Failed to start timer');
+    }
+  };
+
+  const stopRoomTimer = async () => {
+    if (!isTimerRunning) return;
+    
+    try {
+      const response = await fetch(`${apiBase}/study/timer/stop`, {
+        method: 'POST',
+        headers: {
+          ...auth(accessToken),
+          'Content-Type': 'application/json',
+        },
+      });
+      const data = await response.json();
+      
+      setIsTimerRunning(false);
+      setTimerStartTime(null);
+      setTimerSeconds(0);
+      
+      // Show medal unlock notification if any
+      if (data.newlyUnlocked && data.newlyUnlocked.length > 0) {
+        for (const medal of data.newlyUnlocked) {
+          const medalEmoji = medal === 'bronze' ? '🥉' : medal === 'silver' ? '🥈' : '🥇';
+          toast.success(`${medalEmoji} Unlocked ${medal.toUpperCase()} medal!`);
+        }
+      }
+      
+      toast.success(`⏱️ Timer stopped! Logged ${data.elapsedMinutes} minutes`);
+    } catch (error) {
+      console.error('Failed to stop timer:', error);
+      toast.error('Failed to stop timer');
+    }
+  };
+
   const handleLeaveRoom = async () => {
+    // Stop timer if running before leaving
+    if (isTimerRunning) {
+      await stopRoomTimer();
+    }
+    
     setLeaveDialogOpen(false);
     if (joinedRef.current) {
       try {
@@ -887,11 +964,45 @@ export function StudyRoomPage({
                   presence.map((p) => (
                     <li key={p.id} className="text-sm font-medium flex items-center gap-2">
                       <span className="size-2 rounded-full bg-teal-500" />
-                      {p.username}
+                      <span>{p.username}</span>
+                      {p.medal && (
+                        <span className="text-xs" title={`${p.medal} medal`}>
+                          {getMedalEmoji(p.medal)}
+                        </span>
+                      )}
                     </li>
                   ))
                 )}
               </ul>
+            </CardContent>
+          </Card>
+
+          <Card className="flex-none">
+            <CardHeader className="pb-2">
+              <CardTitle className="text-base flex items-center gap-2">
+                ⏱️ Personal Study Timer
+              </CardTitle>
+            </CardHeader>
+            <CardContent className="space-y-3">
+              <div className="text-center">
+                <div className="text-3xl font-bold text-teal-600 font-mono">
+                  {Math.floor(timerSeconds / 3600).toString().padStart(2, '0')}:
+                  {Math.floor((timerSeconds % 3600) / 60).toString().padStart(2, '0')}:
+                  {(timerSeconds % 60).toString().padStart(2, '0')}
+                </div>
+                <p className="text-xs text-muted-foreground mt-1">
+                  {isTimerRunning ? 'Time elapsed' : 'Start timer to track your study'}
+                </p>
+              </div>
+              {isTimerRunning ? (
+                <Button onClick={stopRoomTimer} variant="outline" className="w-full" size="sm">
+                  ⏹️ Stop Timer
+                </Button>
+              ) : (
+                <Button onClick={startRoomTimer} className="w-full" size="sm">
+                  ▶️ Start Timer
+                </Button>
+              )}
             </CardContent>
           </Card>
 

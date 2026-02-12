@@ -18,6 +18,17 @@ interface Settings {
   classes?: string[];
   allowTodoView?: boolean;
   profileImageUrl?: string;
+  totalStudyMinutes?: number;
+  unlockedMedals?: string[];
+  equippedMedal?: string | null;
+}
+
+interface StudyStats {
+  totalMinutes: number;
+  unlockedMedals: string[];
+  equippedMedal: string | null;
+  isTimerRunning: boolean;
+  sessionStartTime: string | null;
 }
 
 interface SettingsPageProps {
@@ -36,9 +47,11 @@ export function SettingsPage({ accessToken, onProfileUpdate }: SettingsPageProps
   const [crop, setCrop] = useState({ x: 0, y: 0 });
   const [zoom, setZoom] = useState(1);
   const [croppedAreaPixels, setCroppedAreaPixels] = useState<Area | null>(null);
+  const [studyStats, setStudyStats] = useState<StudyStats | null>(null);
 
   useEffect(() => {
     fetchSettings();
+    fetchStudyStats();
   }, []);
 
   const fetchSettings = async () => {
@@ -51,6 +64,39 @@ export function SettingsPage({ accessToken, onProfileUpdate }: SettingsPageProps
     } catch (error) {
       console.error('Failed to fetch settings:', error);
       toast.error('Failed to load settings');
+    }
+  };
+
+  const fetchStudyStats = async () => {
+    try {
+      const response = await fetch(`${apiBase}/study/stats`, {
+        headers: { Authorization: `Bearer ${accessToken}` }
+      });
+      const data = await response.json();
+      setStudyStats(data);
+    } catch (error) {
+      console.error('Failed to fetch study stats:', error);
+    }
+  };
+
+  const equipMedal = async (medal: string | null) => {
+    try {
+      const response = await fetch(`${apiBase}/study/medals/equip`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${accessToken}`
+        },
+        body: JSON.stringify({ medal })
+      });
+      const data = await response.json();
+      if (data.success) {
+        setStudyStats(prev => prev ? { ...prev, equippedMedal: medal } : null);
+        toast.success(medal ? `${medal.toUpperCase()} medal equipped!` : 'Medal unequipped');
+      }
+    } catch (error) {
+      console.error('Failed to equip medal:', error);
+      toast.error('Failed to equip medal');
     }
   };
 
@@ -242,6 +288,79 @@ export function SettingsPage({ accessToken, onProfileUpdate }: SettingsPageProps
               onChange={(e) => setSettings({ ...settings, category: e.target.value })}
               placeholder="Your major"
             />
+          </div>
+        </CardContent>
+      </Card>
+
+      <Card>
+        <CardHeader>
+          <CardTitle>Study Achievements</CardTitle>
+        </CardHeader>
+        <CardContent className="space-y-6">
+          <div className="space-y-2">
+            <Label>Total Study Time</Label>
+            <div className="text-3xl font-bold text-teal-600">
+              {studyStats ? Math.floor(studyStats.totalMinutes / 60) : 0}h {studyStats ? studyStats.totalMinutes % 60 : 0}m
+            </div>
+            <p className="text-xs text-muted-foreground">
+              Keep studying to unlock more medals!
+            </p>
+          </div>
+
+          <div className="space-y-3">
+            <Label>Medals</Label>
+            <div className="grid grid-cols-3 gap-4">
+              {[
+                { name: 'bronze', emoji: '🥉', minutes: 100, label: 'Bronze' },
+                { name: 'silver', emoji: '🥈', minutes: 1000, label: 'Silver' },
+                { name: 'gold', emoji: '🥇', minutes: 10000, label: 'Gold' }
+              ].map((medal) => {
+                const isUnlocked = studyStats?.unlockedMedals.includes(medal.name);
+                const isEquipped = studyStats?.equippedMedal === medal.name;
+                const progress = studyStats ? Math.min((studyStats.totalMinutes / medal.minutes) * 100, 100) : 0;
+
+                return (
+                  <button
+                    key={medal.name}
+                    onClick={() => isUnlocked && equipMedal(isEquipped ? null : medal.name)}
+                    disabled={!isUnlocked}
+                    className={`relative p-4 rounded-xl border-2 transition-all ${
+                      isEquipped
+                        ? 'border-teal-500 bg-teal-50 shadow-lg scale-105'
+                        : isUnlocked
+                        ? 'border-gray-200 hover:border-teal-300 hover:bg-gray-50'
+                        : 'border-gray-100 bg-gray-50 opacity-50 cursor-not-allowed'
+                    }`}
+                  >
+                    <div className="text-4xl mb-2">{medal.emoji}</div>
+                    <div className="text-sm font-semibold text-gray-900">{medal.label}</div>
+                    <div className="text-xs text-muted-foreground mt-1">
+                      {isUnlocked ? (
+                        isEquipped ? 'Equipped' : 'Click to equip'
+                      ) : (
+                        `${medal.minutes} min`
+                      )}
+                    </div>
+                    {!isUnlocked && (
+                      <div className="mt-2">
+                        <div className="w-full bg-gray-200 rounded-full h-1.5">
+                          <div
+                            className="bg-teal-500 h-1.5 rounded-full transition-all"
+                            style={{ width: `${progress}%` }}
+                          />
+                        </div>
+                        <div className="text-[10px] text-muted-foreground mt-1">
+                          {Math.round(progress)}%
+                        </div>
+                      </div>
+                    )}
+                  </button>
+                );
+              })}
+            </div>
+            <p className="text-xs text-muted-foreground">
+              Earn medals by studying and equip them to show on your profile!
+            </p>
           </div>
         </CardContent>
       </Card>
