@@ -1,7 +1,17 @@
 import { useState, useEffect, useRef } from 'react';
 import { Button } from './ui/button';
 import { Card, CardContent, CardHeader, CardTitle } from './ui/card';
-import { ArrowLeft, MapPin, Calendar, Clock, Users } from 'lucide-react';
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from './ui/alert-dialog';
+import { DoorOpen, MapPin, Calendar, Clock, Users } from 'lucide-react';
 import { apiBase } from '../utils/api';
 
 interface Participant {
@@ -23,14 +33,16 @@ interface StudyRoomPageProps {
   groupId: string;
   accessToken: string;
   onBack: () => void;
+  onLeaveRoom?: () => void;
 }
 
 const auth = (token: string) => ({ Authorization: `Bearer ${token}` });
 
-export function StudyRoomPage({ groupId, accessToken, onBack }: StudyRoomPageProps) {
+export function StudyRoomPage({ groupId, accessToken, onBack, onLeaveRoom }: StudyRoomPageProps) {
   const [group, setGroup] = useState<Group | null>(null);
   const [loading, setLoading] = useState(true);
   const [presence, setPresence] = useState<Participant[]>([]);
+  const [leaveDialogOpen, setLeaveDialogOpen] = useState(false);
   const joinedRef = useRef(false);
 
   // Fetch room details
@@ -52,7 +64,7 @@ export function StudyRoomPage({ groupId, accessToken, onBack }: StudyRoomPagePro
     return () => { cancelled = true; };
   }, [groupId, accessToken]);
 
-  // Join presence on mount, leave on unmount
+  // Join presence on mount only. Leave only when user clicks "Leave room" (not on sidebar nav).
   useEffect(() => {
     let cancelled = false;
     (async () => {
@@ -66,15 +78,7 @@ export function StudyRoomPage({ groupId, accessToken, onBack }: StudyRoomPagePro
         if (!cancelled) console.error('Failed to join presence', e);
       }
     })();
-    return () => {
-      cancelled = true;
-      if (joinedRef.current) {
-        fetch(`${apiBase}/study-groups/${groupId}/presence`, {
-          method: 'DELETE',
-          headers: auth(accessToken),
-        }).catch(() => {});
-      }
-    };
+    return () => { cancelled = true; };
   }, [groupId, accessToken]);
 
   // Poll presence list
@@ -95,7 +99,8 @@ export function StudyRoomPage({ groupId, accessToken, onBack }: StudyRoomPagePro
     return () => clearInterval(interval);
   }, [groupId, accessToken]);
 
-  const handleBack = async () => {
+  const handleLeaveRoom = async () => {
+    setLeaveDialogOpen(false);
     if (joinedRef.current) {
       try {
         await fetch(`${apiBase}/study-groups/${groupId}/presence`, {
@@ -105,6 +110,7 @@ export function StudyRoomPage({ groupId, accessToken, onBack }: StudyRoomPagePro
       } catch (_) {}
       joinedRef.current = false;
     }
+    onLeaveRoom?.();
     onBack();
   };
 
@@ -120,8 +126,8 @@ export function StudyRoomPage({ groupId, accessToken, onBack }: StudyRoomPagePro
     return (
       <div className="space-y-4">
         <Button variant="ghost" size="sm" onClick={onBack} className="gap-2">
-          <ArrowLeft className="size-4" />
-          Back to Study Groups
+          <DoorOpen className="size-4" />
+          Leave room
         </Button>
         <p className="text-muted-foreground">Room not found.</p>
       </div>
@@ -134,10 +140,31 @@ export function StudyRoomPage({ groupId, accessToken, onBack }: StudyRoomPagePro
   return (
     <div className="space-y-4">
       <div className="flex items-center gap-4">
-        <Button variant="ghost" size="sm" onClick={handleBack} className="gap-2">
-          <ArrowLeft className="size-4" />
-          Back to Study Groups
+        <Button
+          variant="outline"
+          size="sm"
+          onClick={() => setLeaveDialogOpen(true)}
+          className="gap-2 border-red-200 text-red-600 hover:bg-red-50 hover:text-red-700"
+        >
+          <DoorOpen className="size-4" />
+          Leave room
         </Button>
+        <AlertDialog open={leaveDialogOpen} onOpenChange={setLeaveDialogOpen}>
+          <AlertDialogContent>
+            <AlertDialogHeader>
+              <AlertDialogTitle>Leave room?</AlertDialogTitle>
+              <AlertDialogDescription>
+                You will give up your seat and be removed from the participant list. You can re-join if there are seats left.
+              </AlertDialogDescription>
+            </AlertDialogHeader>
+            <AlertDialogFooter>
+              <AlertDialogCancel>Cancel</AlertDialogCancel>
+              <AlertDialogAction onClick={handleLeaveRoom} className="bg-red-600 hover:bg-red-700">
+                Leave room
+              </AlertDialogAction>
+            </AlertDialogFooter>
+          </AlertDialogContent>
+        </AlertDialog>
       </div>
 
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">

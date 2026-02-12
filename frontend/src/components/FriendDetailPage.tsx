@@ -17,6 +17,15 @@ interface Activity {
   total: number;
 }
 
+interface SharedTodo {
+  id: string;
+  name: string;
+  subject?: string;
+  duration?: number;
+  plannedDuration?: number;
+  actualDuration?: number;
+}
+
 interface FriendDetailPageProps {
   accessToken: string;
   friend: Friend;
@@ -25,6 +34,8 @@ interface FriendDetailPageProps {
 
 export function FriendDetailPage({ accessToken, friend, onBack }: FriendDetailPageProps) {
   const [friendActivity, setFriendActivity] = useState<Activity[]>([]);
+  const [sharedTodos, setSharedTodos] = useState<SharedTodo[]>([]);
+  const [todoError, setTodoError] = useState<string | null>(null);
 
   useEffect(() => {
     const fetchFriendActivity = async () => {
@@ -42,6 +53,32 @@ export function FriendDetailPage({ accessToken, friend, onBack }: FriendDetailPa
     fetchFriendActivity();
   }, [accessToken, friend.id]);
 
+  useEffect(() => {
+    const fetchSharedTodos = async () => {
+      try {
+        setTodoError(null);
+        const response = await fetch(`${apiBase}/friends/${friend.id}/todos`, {
+          headers: { Authorization: `Bearer ${accessToken}` }
+        });
+        if (!response.ok) {
+          if (response.status === 403) {
+            setTodoError('This friend is not sharing todos.');
+            setSharedTodos([]);
+            return;
+          }
+          throw new Error('Failed to load todos');
+        }
+        const data = await response.json();
+        setSharedTodos(data.todos || []);
+      } catch (error) {
+        console.error('Failed to fetch shared todos:', error);
+        setTodoError('Failed to load shared todos.');
+      }
+    };
+
+    fetchSharedTodos();
+  }, [accessToken, friend.id]);
+
   const formatTime = (seconds: number) => {
     const hours = Math.floor(seconds / 3600);
     const minutes = Math.floor((seconds % 3600) / 60);
@@ -50,6 +87,20 @@ export function FriendDetailPage({ accessToken, friend, onBack }: FriendDetailPa
 
   const getTotalWeeklyTime = (activity: Activity[]) => {
     return activity.reduce((sum, day) => sum + day.total, 0);
+  };
+
+  const getPlannedSeconds = (todo: SharedTodo) => {
+    return todo.plannedDuration ?? todo.duration ?? 0;
+  };
+
+  const getActualSeconds = (todo: SharedTodo) => {
+    return todo.actualDuration ?? 0;
+  };
+
+  const getProgressPercent = (todo: SharedTodo) => {
+    const planned = getPlannedSeconds(todo);
+    if (planned <= 0) return 0;
+    return Math.min((getActualSeconds(todo) / planned) * 100, 100);
   };
 
   return (
@@ -118,6 +169,52 @@ export function FriendDetailPage({ accessToken, friend, onBack }: FriendDetailPa
               );
             })}
           </div>
+        </CardContent>
+      </Card>
+
+      <Card>
+        <CardHeader>
+          <CardTitle>Shared Todos</CardTitle>
+        </CardHeader>
+        <CardContent>
+          {todoError ? (
+            <p className="text-sm text-muted-foreground">{todoError}</p>
+          ) : sharedTodos.length === 0 ? (
+            <p className="text-sm text-muted-foreground">No shared todos yet.</p>
+          ) : (
+            <div className="space-y-3">
+              {sharedTodos.map((todo) => {
+                const plannedSeconds = getPlannedSeconds(todo);
+                const actualSeconds = getActualSeconds(todo);
+                const progressPercent = getProgressPercent(todo);
+
+                return (
+                  <div key={todo.id} className="flex items-center justify-between gap-4">
+                    <div className="flex-1">
+                      <p className="text-sm font-medium text-gray-900">{todo.name}</p>
+                      <p className="text-xs text-muted-foreground">
+                        {todo.subject || 'No subject'}
+                      </p>
+                      <div className="mt-2">
+                        <div className="h-2 w-40 bg-gray-200 rounded-full">
+                          <div
+                            className="h-2 rounded-full bg-teal-600"
+                            style={{ width: `${progressPercent}%` }}
+                          />
+                        </div>
+                        <p className="text-[11px] text-gray-500 mt-1">
+                          {formatTime(actualSeconds)} / {formatTime(plannedSeconds)}
+                        </p>
+                      </div>
+                    </div>
+                    <span className="text-xs text-muted-foreground">
+                      {formatTime(plannedSeconds)}
+                    </span>
+                  </div>
+                );
+              })}
+            </div>
+          )}
         </CardContent>
       </Card>
     </div>

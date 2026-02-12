@@ -74,6 +74,11 @@ const kvGetByPrefix = async (prefix) => {
   return data?.map((row) => row.value) ?? [];
 };
 
+const toNumber = (value, fallback = 0) => {
+  const num = Number(value);
+  return Number.isFinite(num) ? num : fallback;
+};
+
 const requireUser = async (req) => {
   const authHeader = req.header("Authorization") || "";
   const token = authHeader.startsWith("Bearer ") ? authHeader.slice(7) : "";
@@ -102,6 +107,10 @@ app.post("/auth/signup", async (req, res) => {
       category,
       profileImageUrl: "",
       profileImagePosition: "center",
+      dailyGoal: 0,
+      weeklyGoal: 0,
+      monthlyGoal: 0,
+      lastActivityAt: null,
       classes: [],
       preferences: {},
       allowTodoView: false,
@@ -161,14 +170,26 @@ app.get("/todos", async (req, res) => {
 app.post("/todos", async (req, res) => {
   try {
     const user = await requireUser(req);
-    const { name, subject, duration = 0 } = req.body ?? {};
+    const {
+      name,
+      subject,
+      duration = 0,
+      plannedDuration,
+      actualDuration,
+      shared = false,
+    } = req.body ?? {};
+    const plannedSeconds = toNumber(plannedDuration, toNumber(duration, 0));
+    const actualSeconds = toNumber(actualDuration, 0);
     const todoId = crypto.randomUUID();
     const todo = {
       id: todoId,
       userId: user.id,
       name,
       subject,
-      duration,
+      duration: plannedSeconds,
+      plannedDuration: plannedSeconds,
+      actualDuration: actualSeconds,
+      shared: Boolean(shared),
       completed: false,
       createdAt: new Date().toISOString(),
     };
@@ -185,7 +206,22 @@ app.put("/todos/:id", async (req, res) => {
     const todoId = req.params.id;
     const existing = await kvGet(`todo:${user.id}:${todoId}`);
     if (!existing) return res.status(404).json({ error: "Todo not found" });
-    const updated = { ...existing, ...(req.body ?? {}) };
+    const plannedSeconds = toNumber(
+      req.body?.plannedDuration ?? req.body?.duration ?? existing.plannedDuration ?? existing.duration,
+      toNumber(existing.duration, 0)
+    );
+    const actualSeconds = toNumber(
+      req.body?.actualDuration ?? existing.actualDuration,
+      0
+    );
+    const updated = {
+      ...existing,
+      ...(req.body ?? {}),
+      duration: plannedSeconds,
+      plannedDuration: plannedSeconds,
+      actualDuration: actualSeconds,
+      shared: Boolean(req.body?.shared ?? existing.shared),
+    };
     await kvSet(`todo:${user.id}:${todoId}`, updated);
     return res.json({ todo: updated });
   } catch {
@@ -212,6 +248,13 @@ app.post("/study-time", async (req, res) => {
     const existing = (await kvGet(`study-time:${user.id}:${dateKey}`)) || { total: 0 };
     existing.total += duration;
     await kvSet(`study-time:${user.id}:${dateKey}`, existing);
+    const userProfile = await kvGet(`user:${user.id}`);
+    if (userProfile) {
+      await kvSet(`user:${user.id}`, {
+        ...userProfile,
+        lastActivityAt: new Date().toISOString(),
+      });
+    }
     return res.json({ total: existing.total });
   } catch {
     return res.status(401).json({ error: "Unauthorized" });
@@ -234,6 +277,7 @@ app.get("/study-groups", async (_req, res) => {
     const raw = await kvGetByPrefix("study-group:");
     const groups = [];
     for (const group of raw) {
+      if (applyNoShowCleanup(group)) await kvSet(`study-group:${group.id}`, group);
       const hostProfile = group.hostId ? await kvGet(`user:${group.hostId}`) : null;
       const hostUsername = hostProfile?.username ?? hostProfile?.email ?? (group.hostId?.slice(0, 8) ?? "—");
       groups.push({ ...group, hostUsername });
@@ -250,6 +294,7 @@ app.get("/study-groups/:id", async (req, res) => {
     const groupId = req.params.id;
     const group = await kvGet(`study-group:${groupId}`);
     if (!group) return res.status(404).json({ error: "Group not found" });
+    if (applyNoShowCleanup(group)) await kvSet(`study-group:${groupId}`, group);
     const participantsWithNames = [];
     for (const id of group.participants || []) {
       const profile = await kvGet(`user:${id}`);
@@ -288,8 +333,15 @@ app.post("/study-groups/:id/presence", async (req, res) => {
     const group = await kvGet(`study-group:${groupId}`);
     if (!group) return res.status(404).json({ error: "Group not found" });
     const participantIds = group.participants || [];
-    if (!participantIds.includes(user.id))
-      return res.status(403).json({ error: "Not a participant of this room" });
+    const hasSeats = participantIds.length < (group.maxParticipants || 0);
+    const isParticipant = participantIds.includes(user.id);
+    if (!isParticipant && !hasSeats)
+      return res.status(403).json({ error: "Room is full" });
+    if (!isParticipant && hasSeats) {
+      group.participants = group.participants || [];
+      group.participants.push(user.id);
+      await kvSet(`study-group:${groupId}`, group);
+    }
     const profile = await kvGet(`user:${user.id}`);
     const username = profile?.username ?? profile?.email ?? user.id?.slice(0, 8) ?? "User";
     const presence = (await kvGet(`room-presence:${groupId}`)) || { users: [] };
@@ -298,6 +350,11 @@ app.post("/study-groups/:id/presence", async (req, res) => {
       presence.users.push({ id: user.id, username });
     }
     await kvSet(`room-presence:${groupId}`, presence);
+    if (!group.participantFirstJoinAt) group.participantFirstJoinAt = {};
+    if (!group.participantFirstJoinAt[user.id]) {
+      group.participantFirstJoinAt[user.id] = new Date().toISOString();
+      await kvSet(`study-group:${groupId}`, group);
+    }
     return res.json({ presence: presence.users });
   } catch (err) {
     if (String(err?.message).includes("Unauthorized"))
@@ -306,6 +363,19 @@ app.post("/study-groups/:id/presence", async (req, res) => {
   }
 });
 
+const NO_SHOW_MINUTES = 15;
+
+function applyNoShowCleanup(group) {
+  if (!group || !group.date || !group.participants?.length) return false;
+  const meetingStart = new Date(`${group.date}T${group.time || "00:00"}`);
+  const cutoff = new Date(meetingStart.getTime() + NO_SHOW_MINUTES * 60 * 1000);
+  if (new Date() < cutoff) return false;
+  const firstJoin = group.participantFirstJoinAt || {};
+  const before = group.participants.length;
+  group.participants = group.participants.filter((id) => firstJoin[id] != null);
+  return group.participants.length !== before;
+}
+
 app.delete("/study-groups/:id/presence", async (req, res) => {
   try {
     const user = await requireUser(req);
@@ -313,6 +383,11 @@ app.delete("/study-groups/:id/presence", async (req, res) => {
     let presence = (await kvGet(`room-presence:${groupId}`)) || { users: [] };
     presence.users = (presence.users || []).filter((u) => u.id !== user.id);
     await kvSet(`room-presence:${groupId}`, presence);
+    const group = await kvGet(`study-group:${groupId}`);
+    if (group && Array.isArray(group.participants)) {
+      group.participants = group.participants.filter((id) => id !== user.id);
+      await kvSet(`study-group:${groupId}`, group);
+    }
     return res.json({ presence: presence.users });
   } catch (err) {
     if (String(err?.message).includes("Unauthorized"))
@@ -688,6 +763,25 @@ app.get("/ai/sessions", async (req, res) => {
 
 // Get specific session details
 app.get("/ai/sessions/:id", async (req, res) => {
+app.get("/friends/:id/todos", async (req, res) => {
+  try {
+    await requireUser(req);
+    const friendId = req.params.id;
+    const friendProfile = await kvGet(`user:${friendId}`);
+    if (!friendProfile) return res.status(404).json({ error: "User not found" });
+    if (!friendProfile.allowTodoView) {
+      return res.status(403).json({ error: "Todo sharing is disabled" });
+    }
+    const todos = await kvGetByPrefix(`todo:${friendId}:`);
+    const sharedTodos = (todos || []).filter((todo) => todo.shared);
+    return res.json({ todos: sharedTodos });
+  } catch {
+    return res.status(401).json({ error: "Unauthorized" });
+  }
+});
+
+// AI Study Assistant - File Upload
+app.post("/ai/upload", upload.single("file"), async (req, res) => {
   try {
     const user = await requireUser(req);
     const sessionId = req.params.id;
