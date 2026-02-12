@@ -485,6 +485,7 @@ export default function App() {
             <DashboardPage
               accessToken={accessToken}
               userName={user?.username || user?.email}
+              currentUserId={user?.id || ''}
             />
           )}
           {currentPage === 'study-groups' && (

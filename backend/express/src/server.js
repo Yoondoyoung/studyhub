@@ -5,6 +5,8 @@ import { createClient } from "@supabase/supabase-js";
 import multer from "multer";
 import OpenAI from "openai";
 import sharp from "sharp";
+import http from "http";
+import { WebSocketServer } from "ws";
 import { createRequire } from "module";
 
 const require = createRequire(import.meta.url);
@@ -44,6 +46,7 @@ const anonSupabase = createClient(SUPABASE_URL, SUPABASE_ANON_KEY, {
 });
 
 const KV_TABLE = "kv_store_ba522478";
+const DM_MESSAGE_LIMIT = 200;
 
 const kvSet = async (key, value) => {
   const { error } = await serviceSupabase.from(KV_TABLE).upsert({ key, value });
@@ -79,13 +82,29 @@ const toNumber = (value, fallback = 0) => {
   return Number.isFinite(num) ? num : fallback;
 };
 
-const requireUser = async (req) => {
-  const authHeader = req.header("Authorization") || "";
-  const token = authHeader.startsWith("Bearer ") ? authHeader.slice(7) : "";
+const getUserFromToken = async (token) => {
   if (!token) throw new Error("Unauthorized");
   const { data, error } = await serviceSupabase.auth.getUser(token);
   if (error || !data.user) throw new Error("Unauthorized");
   return data.user;
+};
+
+const requireUser = async (req) => {
+  const authHeader = req.header("Authorization") || "";
+  const token = authHeader.startsWith("Bearer ") ? authHeader.slice(7) : "";
+  return getUserFromToken(token);
+};
+
+const getConversationId = (userId, friendId) =>
+  [userId, friendId].sort().join(":");
+
+const getDmThread = async (userId, friendId) => {
+  const key = `dm:${getConversationId(userId, friendId)}`;
+  const thread = await kvGet(key);
+  if (!thread || !Array.isArray(thread.messages)) {
+    return { key, messages: [] };
+  }
+  return { key, messages: thread.messages };
 };
 
 app.post("/auth/signup", async (req, res) => {
@@ -1591,7 +1610,104 @@ app.get("/users/search", async (req, res) => {
   }
 });
 
+app.get("/dm/:friendId", async (req, res) => {
+  try {
+    const user = await requireUser(req);
+    const friendId = String(req.params.friendId || "");
+    if (!friendId) return res.status(400).json({ error: "Friend id required" });
+    const { messages } = await getDmThread(user.id, friendId);
+    return res.json({ messages });
+  } catch (err) {
+    if (String(err?.message).includes("Unauthorized"))
+      return res.status(401).json({ error: "Unauthorized" });
+    return res.status(500).json({ error: String(err?.message ?? err) });
+  }
+});
+
+const server = http.createServer(app);
+const wss = new WebSocketServer({ server });
+const socketsByUser = new Map();
+
+const addSocket = (userId, socket) => {
+  const sockets = socketsByUser.get(userId) ?? new Set();
+  sockets.add(socket);
+  socketsByUser.set(userId, sockets);
+};
+
+const removeSocket = (userId, socket) => {
+  const sockets = socketsByUser.get(userId);
+  if (!sockets) return;
+  sockets.delete(socket);
+  if (sockets.size === 0) socketsByUser.delete(userId);
+};
+
+const sendToUser = (userId, payload) => {
+  const sockets = socketsByUser.get(userId);
+  if (!sockets) return;
+  const message = JSON.stringify(payload);
+  sockets.forEach((socket) => {
+    if (socket.readyState === 1) {
+      socket.send(message);
+    }
+  });
+};
+
+wss.on("connection", async (socket, req) => {
+  try {
+    const url = new URL(req.url ?? "", "http://localhost");
+    if (url.pathname !== "/ws") {
+      socket.close(1008, "Invalid path");
+      return;
+    }
+    const token = url.searchParams.get("token") ?? "";
+    const user = await getUserFromToken(token);
+    socket.userId = user.id;
+    addSocket(user.id, socket);
+
+    socket.on("message", async (data) => {
+      try {
+        const raw = typeof data === "string" ? data : data.toString();
+        const payload = JSON.parse(raw);
+        if (payload?.type !== "chat:send") return;
+        const recipientId = String(payload?.recipientId ?? "");
+        const content = String(payload?.content ?? "").trim();
+        const clientId = payload?.clientId ? String(payload.clientId) : null;
+        if (!recipientId || !content) return;
+        if (!socket.userId) return;
+        if (recipientId === socket.userId) return;
+
+        const message = {
+          id: crypto.randomUUID(),
+          clientId,
+          senderId: socket.userId,
+          recipientId,
+          content,
+          createdAt: new Date().toISOString(),
+        };
+
+        const { key, messages } = await getDmThread(socket.userId, recipientId);
+        const nextMessages = [...messages, message];
+        const trimmed = nextMessages.slice(-DM_MESSAGE_LIMIT);
+        await kvSet(key, { messages: trimmed });
+
+        const outgoing = { type: "chat:message", message };
+        sendToUser(socket.userId, outgoing);
+        sendToUser(recipientId, outgoing);
+      } catch (error) {
+        console.error("WebSocket message error:", error);
+      }
+    });
+
+    socket.on("close", () => {
+      if (socket.userId) removeSocket(socket.userId, socket);
+    });
+  } catch (error) {
+    console.error("WebSocket connection error:", error);
+    socket.close(1008, "Unauthorized");
+  }
+});
+
 const port = Number(process.env.PORT || 8080);
-app.listen(port, () => {
+server.listen(port, () => {
   console.log(`API listening on http://localhost:${port}`);
 });
