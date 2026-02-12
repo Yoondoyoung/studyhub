@@ -366,27 +366,27 @@ export default function App() {
             <Users className="size-5" />
           </button>
           
-          <div>
+          <div className="relative">
             <button
               onMouseEnter={() => {
                 setShowAiStudyDropdown(true);
                 loadAiStudySessions();
               }}
               onClick={handleAiStudyClick}
-              className={`w-full flex items-center gap-3 px-3 py-2.5 rounded-lg transition-all text-sm ${
+              className={`size-12 rounded-full flex items-center justify-center transition-colors ${
                 currentPage === 'solo-study'
-                  ? 'bg-gray-100 text-gray-900'
-                  : 'text-gray-600 hover:bg-gray-50 hover:text-gray-900'
+                  ? 'bg-black text-white shadow-md'
+                  : 'bg-white text-gray-600 hover:bg-gray-100'
               }`}
+              title="AI study"
             >
-              <BookOpen className="size-4" />
-              <span className="font-medium">AI Study</span>
+              <BookOpen className="size-5" />
             </button>
 
             {/* Expanded session list with animation */}
             {showAiStudyDropdown && aiStudySessions.length > 0 && (
               <div 
-                className="pl-6 space-y-0.5 mt-1 overflow-hidden"
+                className="absolute left-16 top-1/2 -translate-y-1/2 w-44 space-y-0.5 overflow-hidden rounded-xl bg-white shadow-lg p-2"
                 onMouseLeave={() => setShowAiStudyDropdown(false)}
                 style={{
                   animation: 'slideDown 0.2s ease-out'
@@ -430,19 +430,6 @@ export default function App() {
             )}
           </div>
           
-
-          <button
-            onClick={() => navigateTo('solo-study')}
-            className={`size-12 rounded-full flex items-center justify-center transition-colors ${
-              currentPage === 'solo-study'
-                ? 'bg-black text-white shadow-md'
-                : 'bg-white text-gray-600 hover:bg-gray-100'
-            }`}
-            title="AI study"
-          >
-            <BookOpen className="size-5" />
-          </button>
-
           <button
             onClick={() => navigateTo('friends')}
             className={`size-12 rounded-full flex items-center justify-center transition-colors ${
