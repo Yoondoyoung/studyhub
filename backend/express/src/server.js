@@ -1861,6 +1861,53 @@ app.post("/study-groups/:groupId/quiz/answer", async (req, res) => {
   }
 });
 
+// Get quiz completion status
+app.get("/study-groups/:groupId/quiz/completion", async (req, res) => {
+  try {
+    await requireUser(req);
+    const { groupId } = req.params;
+
+    const quizSession = await kvGet(`group-quiz:${groupId}`);
+    if (!quizSession || !quizSession.quiz) {
+      return res.json({ completed: 0, total: 0, allCompleted: false });
+    }
+
+    // Get current presence
+    const presence = await kvGet(`room-presence:${groupId}`);
+    const currentUsers = presence?.users || [];
+    const totalUsers = currentUsers.length;
+
+    if (totalUsers === 0) {
+      return res.json({ completed: 0, total: 0, allCompleted: false });
+    }
+
+    // Count how many users completed the quiz
+    const totalQuestions = quizSession.quiz.questions.length;
+    const allAnswers = quizSession.answers || {};
+    
+    let completedCount = 0;
+    currentUsers.forEach((user) => {
+      const userAnswers = allAnswers[user.id];
+      if (userAnswers && Object.keys(userAnswers).length === totalQuestions) {
+        completedCount++;
+      }
+    });
+
+    const allCompleted = completedCount === totalUsers;
+
+    return res.json({
+      completed: completedCount,
+      total: totalUsers,
+      allCompleted,
+    });
+  } catch (err) {
+    console.error("Get completion status error:", err);
+    if (String(err?.message).includes("Unauthorized"))
+      return res.status(401).json({ error: "Unauthorized" });
+    return res.status(500).json({ error: String(err?.message ?? err) });
+  }
+});
+
 // Get group quiz results (aggregate statistics)
 app.get("/study-groups/:groupId/quiz/results", async (req, res) => {
   try {
