@@ -643,7 +643,8 @@ app.post("/ai/sessions", async (req, res) => {
       userId: user.id,
       name: sessionName,
       files: [],
-      chatHistory: [],
+      studentChatHistory: [],
+      teachChatHistory: [],
       createdAt: now.toISOString(),
       updatedAt: now.toISOString(),
     };
@@ -672,7 +673,7 @@ app.get("/ai/sessions", async (req, res) => {
         id: s.id,
         name: s.name,
         fileCount: s.files?.length || 0,
-        messageCount: s.chatHistory?.length || 0,
+        messageCount: (s.studentChatHistory?.length || 0) + (s.teachChatHistory?.length || 0),
         createdAt: s.createdAt,
         updatedAt: s.updatedAt,
       }));
@@ -862,7 +863,7 @@ app.post("/ai/sessions/:id/chat", async (req, res) => {
   try {
     const user = await requireUser(req);
     const sessionId = req.params.id;
-    const { message, mode = "student" } = req.body ?? {};
+    const { message, mode = "student", phase = "teaching" } = req.body ?? {};
 
     if (!message) {
       return res.status(400).json({ error: "No message provided" });
@@ -890,17 +891,79 @@ app.post("/ai/sessions/:id/chat", async (req, res) => {
         systemPrompt = "You are a helpful study assistant. Always respond in English only. The student hasn't uploaded any material yet, but you can still help them with general study questions. Encourage them to upload their study materials for more specific help.";
       }
     } else if (mode === "teach") {
-      systemPrompt = "You are a study assistant evaluating a student's explanation. Always respond in English only. Provide constructive feedback on their understanding. Point out what they explained well and what could be improved. Rate their understanding out of 10 and encourage them to keep learning.";
+      if (phase === "teaching") {
+        // Teaching Phase: Evaluate student's explanation with scoring
+        if (filesContext) {
+          systemPrompt = `You are an educational evaluator. Always respond in English only. The student has uploaded these study materials:\n\n${filesContext}\n\nThe student will explain the concepts from these materials. Your role is to:
+
+1. **Compare** their explanation with the actual file content
+2. **Score** their understanding from 0-10
+3. **Identify** what they explained correctly ✅
+4. **Point out** what they misunderstood or explained incorrectly ❌
+5. **Highlight** important parts from the files they missed ⚠️
+6. **Provide** specific feedback on how to improve
+
+Format your response as:
+⭐ Score: X/10
+
+✅ Correct parts:
+- [list what they got right]
+
+❌ Incorrect/Incomplete parts:
+- [list what needs correction]
+
+⚠️ Missing key concepts (from the files):
+- [list important parts they didn't mention]
+
+💡 Suggestions:
+- [how to improve their explanation]
+
+Encourage them to explain again with improvements to get a higher score. When they reach 9-10/10, congratulate them and suggest they're ready for the Quiz Phase!`;
+        } else {
+          systemPrompt = "You are an educational evaluator. Always respond in English only. The student will explain concepts to you. Since no study materials are uploaded, evaluate based on general knowledge. Provide a score out of 10 and constructive feedback on their explanation.";
+        }
+      } else if (phase === "quiz") {
+        // Quiz Phase: AI asks questions and validates answers
+        if (filesContext) {
+          systemPrompt = `You are a quiz master. Always respond in English only. You have access to these study materials:\n\n${filesContext}\n\nYour role is to:
+
+**When asking questions:**
+- Ask ONE clear question at a time based on the uploaded materials
+- Focus on key concepts, formulas, or important details from the files
+- Make questions specific and measurable
+- Number your questions (Q1, Q2, etc.)
+
+**When evaluating answers:**
+- Check if the student's answer is correct based on the file content
+- Respond with: "✅ Correct!" or "❌ Incorrect"
+- If correct: Provide brief positive reinforcement and ask the next question
+- If incorrect: Show the correct answer from the files and explain why
+- After 3-5 questions, summarize their performance
+
+Keep questions challenging but fair. Base everything on the actual file content.`;
+        } else {
+          systemPrompt = "You are a quiz master. Always respond in English only. Since no study materials are uploaded, you can ask general knowledge questions. Evaluate student answers and provide correct answers when they're wrong.";
+        }
+      }
     }
+
+    // Determine which chat history to use based on mode
+    const chatHistoryKey = mode === "teach" ? "teachChatHistory" : "studentChatHistory";
+    
+    // Initialize chat history arrays if they don't exist (for old sessions)
+    if (!session.studentChatHistory) session.studentChatHistory = [];
+    if (!session.teachChatHistory) session.teachChatHistory = [];
+    
+    const chatHistory = session[chatHistoryKey];
 
     // Build messages array with chat history
     const messages = [
       { role: "system", content: systemPrompt }
     ];
 
-    // Add previous chat history
-    if (session.chatHistory && session.chatHistory.length > 0) {
-      session.chatHistory.forEach(msg => {
+    // Add previous chat history for this mode
+    if (chatHistory.length > 0) {
+      chatHistory.forEach(msg => {
         messages.push({ role: msg.role, content: msg.content });
       });
     }
@@ -918,13 +981,13 @@ app.post("/ai/sessions/:id/chat", async (req, res) => {
 
     const aiResponse = completion.choices[0].message.content;
 
-    // Save to chat history
-    session.chatHistory.push({
+    // Save to appropriate chat history
+    session[chatHistoryKey].push({
       role: "user",
       content: message,
       timestamp: new Date().toISOString()
     });
-    session.chatHistory.push({
+    session[chatHistoryKey].push({
       role: "assistant",
       content: aiResponse,
       timestamp: new Date().toISOString()
@@ -936,7 +999,7 @@ app.post("/ai/sessions/:id/chat", async (req, res) => {
     return res.json({ 
       success: true,
       response: aiResponse,
-      messageCount: session.chatHistory.length
+      messageCount: session.studentChatHistory.length + session.teachChatHistory.length
     });
   } catch (err) {
     console.error("Chat error:", err);
@@ -1005,7 +1068,7 @@ app.post("/ai/sessions/:id/voice-chat", upload.single("audio"), async (req, res)
     const user = await requireUser(req);
     const sessionId = req.params.id;
     const audioFile = req.file;
-    const { mode = "student" } = req.body ?? {};
+    const { mode = "student", phase = "teaching" } = req.body ?? {};
 
     if (!audioFile) {
       return res.status(400).json({ error: "No audio file provided" });
@@ -1052,14 +1115,35 @@ app.post("/ai/sessions/:id/voice-chat", upload.single("audio"), async (req, res)
         systemPrompt = "You are a helpful study assistant. Always respond in English only. The student hasn't uploaded any material yet, but you can still help them with general study questions.";
       }
     } else if (mode === "teach") {
-      systemPrompt = "You are a study assistant evaluating a student's explanation. Always respond in English only. Provide constructive feedback on their understanding.";
+      if (phase === "teaching") {
+        if (filesContext) {
+          systemPrompt = `You are an educational evaluator. Always respond in English only. The student has uploaded these study materials:\n\n${filesContext}\n\nEvaluate their explanation with a score (X/10), identify correct parts, incorrect parts, and missing key concepts from the files. Be encouraging and specific.`;
+        } else {
+          systemPrompt = "You are an educational evaluator. Always respond in English only. Evaluate the student's explanation with a score out of 10 and constructive feedback.";
+        }
+      } else if (phase === "quiz") {
+        if (filesContext) {
+          systemPrompt = `You are a quiz master. Always respond in English only. Ask ONE question based on:\n\n${filesContext}\n\nOr evaluate their answer with "✅ Correct!" or "❌ Incorrect" and provide the right answer from the files.`;
+        } else {
+          systemPrompt = "You are a quiz master. Always respond in English only. Ask questions or evaluate answers based on general knowledge.";
+        }
+      }
     }
+
+    // Determine which chat history to use based on mode
+    const chatHistoryKey = mode === "teach" ? "teachChatHistory" : "studentChatHistory";
+    
+    // Initialize chat history arrays if they don't exist (for old sessions)
+    if (!session.studentChatHistory) session.studentChatHistory = [];
+    if (!session.teachChatHistory) session.teachChatHistory = [];
+    
+    const chatHistory = session[chatHistoryKey];
 
     // Build messages with history
     const messages = [{ role: "system", content: systemPrompt }];
     
-    if (session.chatHistory && session.chatHistory.length > 0) {
-      session.chatHistory.forEach(msg => {
+    if (chatHistory.length > 0) {
+      chatHistory.forEach(msg => {
         messages.push({ role: msg.role, content: msg.content });
       });
     }
@@ -1088,13 +1172,13 @@ app.post("/ai/sessions/:id/voice-chat", upload.single("audio"), async (req, res)
     const audioBuffer = Buffer.from(await mp3Response.arrayBuffer());
     console.log(`TTS audio generated: ${audioBuffer.length} bytes`);
 
-    // Save to chat history
-    session.chatHistory.push({
+    // Save to appropriate chat history
+    session[chatHistoryKey].push({
       role: "user",
       content: userMessage,
       timestamp: new Date().toISOString()
     });
-    session.chatHistory.push({
+    session[chatHistoryKey].push({
       role: "assistant",
       content: aiResponseText,
       timestamp: new Date().toISOString()
@@ -1109,7 +1193,7 @@ app.post("/ai/sessions/:id/voice-chat", upload.single("audio"), async (req, res)
       userMessage: userMessage,
       aiResponse: aiResponseText,
       audioBase64: audioBuffer.toString("base64"),
-      messageCount: session.chatHistory.length
+      messageCount: session.studentChatHistory.length + session.teachChatHistory.length
     });
   } catch (err) {
     console.error("Voice chat error:", err);
@@ -1203,6 +1287,132 @@ app.post("/ai/voice-chat", upload.single("audio"), async (req, res) => {
     });
   } catch (err) {
     console.error("Voice chat error:", err);
+    return res.status(500).json({ error: String(err?.message ?? err) });
+  }
+});
+
+// Generate quiz questions for a session
+app.post("/ai/sessions/:id/generate-quiz", async (req, res) => {
+  try {
+    const user = await requireUser(req);
+    const sessionId = req.params.id;
+
+    const session = await kvGet(`ai-session:${user.id}:${sessionId}`);
+    if (!session) {
+      return res.status(404).json({ error: "Session not found" });
+    }
+
+    // Build context from session files
+    let filesContext = "";
+    if (session.files && session.files.length > 0) {
+      filesContext = session.files
+        .map(f => `[File: ${f.fileName}]\n${f.content.substring(0, 3000)}`)
+        .join("\n\n");
+    }
+
+    const quizPrompt = filesContext
+      ? `Based on the following study materials, generate exactly 10 multiple-choice questions. Each question should test understanding of key concepts from the materials.
+
+Study Materials:
+${filesContext}
+
+Generate the questions in this EXACT JSON format (respond ONLY with valid JSON, no additional text):
+{
+  "questions": [
+    {
+      "id": 1,
+      "question": "Question text here?",
+      "options": ["Option A", "Option B", "Option C", "Option D"],
+      "correctAnswer": 0,
+      "explanation": "Brief explanation of why this is correct"
+    }
+  ]
+}
+
+Requirements:
+- Exactly 10 questions
+- Each question has 4 options (A, B, C, D)
+- correctAnswer is the index (0, 1, 2, or 3)
+- Questions should cover different topics from the materials
+- Make questions challenging but fair
+- Always respond in English only`
+      : `Generate 10 general knowledge multiple-choice questions in this EXACT JSON format (respond ONLY with valid JSON):
+{
+  "questions": [
+    {
+      "id": 1,
+      "question": "Question text?",
+      "options": ["A", "B", "C", "D"],
+      "correctAnswer": 0,
+      "explanation": "Why this is correct"
+    }
+  ]
+}`;
+
+    console.log("Generating quiz questions...");
+    const completion = await openai.chat.completions.create({
+      model: "gpt-4o-mini",
+      messages: [
+        { role: "system", content: "You are a quiz generator. Always respond with valid JSON only, no additional text. Ensure all strings are properly escaped." },
+        { role: "user", content: quizPrompt }
+      ],
+      temperature: 0.8,
+      max_tokens: 2500,
+      response_format: { type: "json_object" }
+    });
+
+    let quizData;
+    try {
+      const responseText = completion.choices[0].message.content;
+      console.log("Quiz response received, parsing...");
+      quizData = JSON.parse(responseText);
+    } catch (parseError) {
+      console.error("Failed to parse quiz JSON:", parseError);
+      console.error("Raw response:", completion.choices[0].message.content?.substring(0, 500));
+      return res.status(500).json({ error: "Failed to generate valid quiz format" });
+    }
+
+    console.log(`Generated ${quizData.questions?.length || 0} questions`);
+
+    return res.json({
+      success: true,
+      quiz: quizData
+    });
+  } catch (err) {
+    console.error("Quiz generation error:", err);
+    if (String(err?.message).includes("Unauthorized"))
+      return res.status(401).json({ error: "Unauthorized" });
+    return res.status(500).json({ error: String(err?.message ?? err) });
+  }
+});
+
+// Delete a session
+app.delete("/ai/sessions/:id", async (req, res) => {
+  try {
+    const user = await requireUser(req);
+    const sessionId = req.params.id;
+    const sessionKey = `ai-session:${user.id}:${sessionId}`;
+
+    // Check if session exists
+    const session = await kvGet(sessionKey);
+    if (!session) {
+      return res.status(404).json({ error: "Session not found" });
+    }
+
+    // Delete the session
+    await kvDel(sessionKey);
+
+    // If this was the active session, clear it
+    const activeSessionId = await kvGet(`active-session:${user.id}`);
+    if (activeSessionId === sessionId) {
+      await kvDel(`active-session:${user.id}`);
+    }
+
+    return res.json({ success: true });
+  } catch (err) {
+    console.error("Delete session error:", err);
+    if (String(err?.message).includes("Unauthorized"))
+      return res.status(401).json({ error: "Unauthorized" });
     return res.status(500).json({ error: String(err?.message ?? err) });
   }
 });
