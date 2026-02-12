@@ -130,6 +130,12 @@ export default function App() {
     setRoomUserIsIn(groupId);
   };
 
+  const navigateToMeeting = (meetingId: string) => {
+    window.location.hash = `meeting-${meetingId}`;
+    setCurrentPage('meeting');
+    setCurrentMeetingId(meetingId);
+  };
+
   const checkSession = async () => {
     const savedToken = localStorage.getItem('accessToken');
     if (savedToken) {
@@ -506,6 +512,7 @@ export default function App() {
               currentUserUsername={user?.username}
               roomUserIsIn={roomUserIsIn}
               onJoinRoom={navigateToRoom}
+              onJoinMeeting={navigateToMeeting}
             />
           )}
           {currentPage === 'room' && currentGroupId && (

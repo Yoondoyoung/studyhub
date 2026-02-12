@@ -406,21 +406,22 @@ app.delete("/study-groups/:id/presence", async (req, res) => {
 app.post("/study-groups", async (req, res) => {
   try {
     const user = await requireUser(req);
-    const { location, date, time, topic, maxParticipants = 10, studyType, duration } = req.body ?? {};
+    const { location, date, time, topic, maxParticipants = 10, studyType, duration, meetingId } = req.body ?? {};
     const groupId = crypto.randomUUID();
     const group = {
       id: groupId,
       hostId: user.id,
-      location,
-      date,
-      time,
+      location: location ?? (meetingId ? "Online (Zoom)" : ""),
+      date: date ?? new Date().toISOString().slice(0, 10),
+      time: time ?? "00:00",
       topic,
-      maxParticipants,
-      studyType: studyType ?? "In-person",
+      maxParticipants: maxParticipants ?? 50,
+      studyType: studyType ?? (meetingId ? "Online" : "In-person"),
       duration: duration ?? "2 hours",
       participants: [user.id],
       applicants: [],
       createdAt: new Date().toISOString(),
+      ...(meetingId ? { meetingId } : {}),
     };
     await kvSet(`study-group:${groupId}`, group);
     return res.json({ group });
@@ -507,10 +508,22 @@ app.delete("/study-groups/:id", async (req, res) => {
     const group = await kvGet(`study-group:${groupId}`);
     if (!group) return res.status(404).json({ error: "Group not found" });
     if (group.hostId !== user.id) return res.status(403).json({ error: "Not authorized" });
+    if (group.meetingId) {
+      const meeting = await kvGet(`meeting:${group.meetingId}`);
+      if (meeting?.zoomMeetingNumber) {
+        try {
+          await deleteZoomMeetingViaApi(meeting.zoomMeetingNumber);
+        } catch (err) {
+          console.warn("Zoom delete meeting failed:", err?.message);
+        }
+      }
+      await kvDel(`meeting:${group.meetingId}`);
+    }
     await kvDel(`study-group:${groupId}`);
     return res.json({ success: true });
-  } catch {
-    return res.status(401).json({ error: "Unauthorized" });
+  } catch (err) {
+    if (String(err?.message).includes("Unauthorized")) return res.status(401).json({ error: "Unauthorized" });
+    return res.status(500).json({ error: String(err?.message ?? err) });
   }
 });
 
@@ -1689,6 +1702,138 @@ app.get("/api/meetings/:id", async (req, res) => {
     }
     return res.json(meeting);
   } catch (err) {
+    return res.status(500).json({ error: String(err?.message ?? err) });
+  }
+});
+
+// --- Zoom Server-to-Server OAuth (create meeting via API) ---
+const ZOOM_ACCOUNT_ID = process.env.ZOOM_ACCOUNT_ID ?? "";
+const ZOOM_CLIENT_ID = process.env.ZOOM_CLIENT_ID ?? "";
+const ZOOM_CLIENT_SECRET = process.env.ZOOM_CLIENT_SECRET ?? "";
+
+let zoomTokenCache = { token: null, expiresAt: 0 };
+
+async function getZoomAccessToken() {
+  if (!ZOOM_ACCOUNT_ID || !ZOOM_CLIENT_ID || !ZOOM_CLIENT_SECRET) {
+    throw new Error("Zoom S2S OAuth not configured (ZOOM_ACCOUNT_ID, ZOOM_CLIENT_ID, ZOOM_CLIENT_SECRET)");
+  }
+  if (zoomTokenCache.token && Date.now() < zoomTokenCache.expiresAt - 60000) {
+    return zoomTokenCache.token;
+  }
+  const basic = Buffer.from(`${ZOOM_CLIENT_ID}:${ZOOM_CLIENT_SECRET}`).toString("base64");
+  const res = await fetch("https://zoom.us/oauth/token", {
+    method: "POST",
+    headers: {
+      "Authorization": `Basic ${basic}`,
+      "Content-Type": "application/x-www-form-urlencoded",
+    },
+    body: new URLSearchParams({
+      grant_type: "account_credentials",
+      account_id: ZOOM_ACCOUNT_ID,
+    }).toString(),
+  });
+  const data = await res.json();
+  if (!res.ok || !data.access_token) {
+    throw new Error(data.error ?? data.reason ?? "Failed to get Zoom token");
+  }
+  zoomTokenCache = {
+    token: data.access_token,
+    expiresAt: Date.now() + (Number(data.expires_in) || 3600) * 1000,
+  };
+  return zoomTokenCache.token;
+}
+
+async function createZoomMeetingViaApi(topic, durationMinutes = 60) {
+  const token = await getZoomAccessToken();
+  const duration = Math.min(Math.max(Number(durationMinutes) || 60, 15), 480);
+  const startTime = new Date(Date.now() - 60 * 1000);
+  const res = await fetch("https://api.zoom.us/v2/users/me/meetings", {
+    method: "POST",
+    headers: {
+      "Authorization": `Bearer ${token}`,
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify({
+      topic: topic || "Study Meeting",
+      type: 2,
+      start_time: startTime.toISOString().replace(/\.\d{3}Z$/, "Z"),
+      duration,
+      timezone: "UTC",
+      settings: {
+        join_before_host: true,
+        waiting_room: false,
+        approval_type: 2,
+        host_video: true,
+        participant_video: true,
+      },
+    }),
+  });
+  const data = await res.json();
+  if (!res.ok) {
+    throw new Error(data.message ?? data.code ?? "Zoom API create meeting failed");
+  }
+  return {
+    zoomMeetingNumber: String(data.id),
+    password: data.password ?? "",
+    topic: data.topic ?? topic,
+    joinUrl: data.join_url,
+    startUrl: data.start_url,
+  };
+}
+
+async function deleteZoomMeetingViaApi(zoomMeetingNumber) {
+  if (!zoomMeetingNumber) return;
+  const token = await getZoomAccessToken();
+  const meetingId = String(zoomMeetingNumber).trim();
+  const urlsToTry = [
+    `https://api.zoom.us/v2/users/me/meetings/${meetingId}`,
+    `https://api.zoom.us/v2/meetings/${meetingId}`,
+  ];
+  let lastError = null;
+  for (const url of urlsToTry) {
+    const res = await fetch(url, {
+      method: "DELETE",
+      headers: { "Authorization": `Bearer ${token}` },
+    });
+    const body = await res.text();
+    if (res.ok || res.status === 204) {
+      console.log("[Zoom delete] OK meetingId=", meetingId);
+      return;
+    }
+    if (res.status === 404) return;
+    try {
+      lastError = JSON.parse(body).message ?? body.slice(0, 150);
+    } catch {
+      lastError = body.slice(0, 150) || res.statusText;
+    }
+    console.warn("[Zoom delete] try", url, res.status, lastError);
+  }
+  throw new Error(lastError ?? "Zoom API delete meeting failed");
+}
+
+app.post("/api/meetings/create-zoom", async (req, res) => {
+  try {
+    const user = await requireUser(req);
+    const { topic = "Study Meeting", durationMinutes } = req.body ?? {};
+    const zoom = await createZoomMeetingViaApi(topic, durationMinutes);
+    const meetingId = crypto.randomUUID();
+    const joinUrl = `${req.protocol}://${req.get("host") || "localhost"}#meeting-${meetingId}`;
+    const meeting = {
+      meetingId,
+      provider: "zoom",
+      zoomMeetingNumber: zoom.zoomMeetingNumber,
+      password: zoom.password,
+      topic: zoom.topic,
+      hostUserId: user.id,
+      scheduledAt: new Date().toISOString(),
+      status: "scheduled",
+    };
+    await kvSet(`meeting:${meetingId}`, meeting);
+    return res.json({ meeting, joinUrl });
+  } catch (err) {
+    if (String(err?.message) === "Unauthorized") {
+      return res.status(401).json({ error: "Unauthorized" });
+    }
     return res.status(500).json({ error: String(err?.message ?? err) });
   }
 });

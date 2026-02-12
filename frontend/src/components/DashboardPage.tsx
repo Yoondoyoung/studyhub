@@ -3,7 +3,7 @@ import { Button } from './ui/button';
 import { Input } from './ui/input';
 import { Label } from './ui/label';
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger } from './ui/dialog';
-import { Plus, CheckCircle2, Pencil, Video } from 'lucide-react';
+import { Plus, CheckCircle2, Pencil } from 'lucide-react';
 import { toast } from 'sonner';
 import { Avatar, AvatarFallback } from './ui/avatar';
 import { Switch } from './ui/switch';
@@ -67,11 +67,7 @@ export function DashboardPage({ accessToken, userName }: DashboardPageProps) {
   const [nearbyRooms, setNearbyRooms] = useState<StudyRoom[]>([]);
   const [studyStreak, setStudyStreak] = useState<{ day: string; completed: boolean }[]>([]);
   const heatmapColumns = 52;
-  const [isMeetingDialogOpen, setIsMeetingDialogOpen] = useState(false);
-  const [meetingForm, setMeetingForm] = useState({ zoomMeetingNumber: '', password: '', topic: 'Study meeting' });
-  const [createdMeetingLink, setCreatedMeetingLink] = useState<string | null>(null);
-  const [creatingMeeting, setCreatingMeeting] = useState(false);
-  
+
   const [newTodo, setNewTodo] = useState({
     name: '',
     subject: '',
@@ -520,51 +516,6 @@ export function DashboardPage({ accessToken, userName }: DashboardPageProps) {
     return name.split(' ').map(n => n[0]).join('');
   };
 
-  const handleCreateMeeting = async () => {
-    const mn = meetingForm.zoomMeetingNumber.trim();
-    if (!mn) {
-      toast.error('Enter Zoom meeting number');
-      return;
-    }
-    setCreatingMeeting(true);
-    setCreatedMeetingLink(null);
-    try {
-      const res = await fetch(`${apiBase}/api/meetings`, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          Authorization: `Bearer ${accessToken}`
-        },
-        body: JSON.stringify({
-          zoomMeetingNumber: mn,
-          password: meetingForm.password.trim(),
-          topic: meetingForm.topic.trim() || 'Study meeting'
-        })
-      });
-      const data = await res.json();
-      if (!res.ok) throw new Error(data.error || 'Failed to create meeting');
-      const meetingId = data.meeting?.meetingId ?? data.meetingId;
-      const base = window.location.origin + window.location.pathname;
-      setCreatedMeetingLink(`${base}#meeting-${meetingId}`);
-      toast.success('Meeting created. Share the link to invite others.');
-    } catch (e) {
-      toast.error(e instanceof Error ? e.message : 'Failed to create meeting');
-    } finally {
-      setCreatingMeeting(false);
-    }
-  };
-
-  const openMeetingDialog = () => {
-    setMeetingForm({ zoomMeetingNumber: '', password: '', topic: 'Study meeting' });
-    setCreatedMeetingLink(null);
-    setIsMeetingDialogOpen(true);
-  };
-
-  const goToMeeting = (meetingId: string) => {
-    setIsMeetingDialogOpen(false);
-    window.location.hash = `meeting-${meetingId}`;
-  };
-
   const getActivityStatus = (friend: Friend) => {
     if (!friend.lastActivityAt) {
       return { label: 'Inactive', isOnline: false };
@@ -640,84 +591,8 @@ export function DashboardPage({ accessToken, userName }: DashboardPageProps) {
 
   return (
     <div className="space-y-6">
-      <div className="flex items-center justify-between flex-wrap gap-4">
+      <div>
         <h1 className="text-3xl font-semibold text-gray-900">Hi {userName || 'there'},</h1>
-        <Dialog open={isMeetingDialogOpen} onOpenChange={setIsMeetingDialogOpen}>
-          <DialogTrigger asChild>
-            <Button variant="outline" className="gap-2" onClick={openMeetingDialog}>
-              <Video className="size-4" />
-              Start Zoom meeting
-            </Button>
-          </DialogTrigger>
-          <DialogContent className="sm:max-w-md">
-            <DialogHeader>
-              <DialogTitle>Create online meeting</DialogTitle>
-            </DialogHeader>
-            <div className="space-y-4 py-2">
-              {!createdMeetingLink ? (
-                <>
-                  <div className="space-y-2">
-                    <Label htmlFor="zoom-mn">Zoom meeting number</Label>
-                    <Input
-                      id="zoom-mn"
-                      placeholder="e.g. 1234567890"
-                      value={meetingForm.zoomMeetingNumber}
-                      onChange={(e) => setMeetingForm((f) => ({ ...f, zoomMeetingNumber: e.target.value }))}
-                    />
-                  </div>
-                  <div className="space-y-2">
-                    <Label htmlFor="zoom-pwd">Meeting password (optional)</Label>
-                    <Input
-                      id="zoom-pwd"
-                      type="password"
-                      placeholder="Leave empty if none"
-                      value={meetingForm.password}
-                      onChange={(e) => setMeetingForm((f) => ({ ...f, password: e.target.value }))}
-                    />
-                  </div>
-                  <div className="space-y-2">
-                    <Label htmlFor="zoom-topic">Topic (optional)</Label>
-                    <Input
-                      id="zoom-topic"
-                      placeholder="Study meeting"
-                      value={meetingForm.topic}
-                      onChange={(e) => setMeetingForm((f) => ({ ...f, topic: e.target.value }))}
-                    />
-                  </div>
-                  <Button className="w-full" onClick={handleCreateMeeting} disabled={creatingMeeting}>
-                    {creatingMeeting ? 'Creating...' : 'Create meeting'}
-                  </Button>
-                </>
-              ) : (
-                <div className="space-y-3">
-                  <p className="text-sm text-gray-600">Share this link to invite others:</p>
-                  <div className="flex gap-2">
-                    <Input readOnly value={createdMeetingLink} className="font-mono text-xs" />
-                    <Button
-                      size="sm"
-                      variant="secondary"
-                      onClick={() => {
-                        navigator.clipboard.writeText(createdMeetingLink);
-                        toast.success('Link copied');
-                      }}
-                    >
-                      Copy
-                    </Button>
-                  </div>
-                  <Button
-                    className="w-full"
-                    onClick={() => {
-                      const id = createdMeetingLink?.split('#meeting-')[1];
-                      if (id) goToMeeting(id);
-                    }}
-                  >
-                    Open meeting
-                  </Button>
-                </div>
-              )}
-            </div>
-          </DialogContent>
-        </Dialog>
       </div>
 
       <div className="grid grid-cols-1 xl:grid-cols-12 gap-6 items-stretch">
