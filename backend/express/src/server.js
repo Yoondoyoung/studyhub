@@ -1389,6 +1389,7 @@ app.post("/ai/sessions/:id/generate-quiz", async (req, res) => {
   try {
     const user = await requireUser(req);
     const sessionId = req.params.id;
+    const { count = 10, difficulty = "medium" } = req.body || {};
 
     const session = await kvGet(`ai-session:${user.id}:${sessionId}`);
     if (!session) {
@@ -1403,8 +1404,17 @@ app.post("/ai/sessions/:id/generate-quiz", async (req, res) => {
         .join("\n\n");
     }
 
+    // Difficulty-specific instructions
+    const difficultyInstructions = {
+      easy: "Make the questions straightforward and test basic understanding of key terms and main concepts. Use simple language.",
+      medium: "Make the questions moderately challenging, testing both understanding and application of concepts. Balance between recall and analysis.",
+      hard: "Make the questions challenging, requiring deep understanding, critical thinking, and ability to apply concepts in new contexts. Include complex scenarios."
+    };
+
+    const difficultyInstruction = difficultyInstructions[difficulty.toLowerCase()] || difficultyInstructions.medium;
+
     const quizPrompt = filesContext
-      ? `Based on the following study materials, generate exactly 10 multiple-choice questions. Each question should test understanding of key concepts from the materials.
+      ? `Based on the following study materials, generate exactly ${count} multiple-choice questions. Each question should test understanding of key concepts from the materials.
 
 Study Materials:
 ${filesContext}
@@ -1423,13 +1433,13 @@ Generate the questions in this EXACT JSON format (respond ONLY with valid JSON, 
 }
 
 Requirements:
-- Exactly 10 questions
+- Exactly ${count} questions
 - Each question has 4 options (A, B, C, D)
 - correctAnswer is the index (0, 1, 2, or 3)
 - Questions should cover different topics from the materials
-- Make questions challenging but fair
+- Difficulty level: ${difficulty.toUpperCase()} - ${difficultyInstruction}
 - Always respond in English only`
-      : `Generate 10 general knowledge multiple-choice questions in this EXACT JSON format (respond ONLY with valid JSON):
+      : `Generate ${count} general knowledge multiple-choice questions in this EXACT JSON format (respond ONLY with valid JSON):
 {
   "questions": [
     {
@@ -1440,7 +1450,9 @@ Requirements:
       "explanation": "Why this is correct"
     }
   ]
-}`;
+}
+
+Difficulty: ${difficulty.toUpperCase()} - ${difficultyInstruction}`;
 
     console.log("Generating quiz questions...");
     const completion = await openai.chat.completions.create({
@@ -1466,6 +1478,12 @@ Requirements:
     }
 
     console.log(`Generated ${quizData.questions?.length || 0} questions`);
+
+    // Save quiz to session
+    session.quizData = quizData;
+    session.quizSettings = { count, difficulty };
+    session.updatedAt = new Date().toISOString();
+    await kvSet(`ai-session:${user.id}:${sessionId}`, session);
 
     return res.json({
       success: true,
