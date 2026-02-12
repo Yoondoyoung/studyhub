@@ -90,7 +90,9 @@ export default function App() {
   const [currentMeetingId, setCurrentMeetingId] = useState<string | null>(null);
   const [inMeeting, setInMeeting] = useState(false);
   const [zoomPopupPos, setZoomPopupPos] = useState({ x: 24, y: 24 });
+  const [zoomPopupSize, setZoomPopupSize] = useState({ width: 360, height: 280 });
   const zoomDragRef = useRef({ isDragging: false, startX: 0, startY: 0, startLeft: 0, startTop: 0 });
+  const zoomResizeRef = useRef({ isResizing: false, startX: 0, startY: 0, startW: 0, startH: 0 });
   const zoomContainerRef = useRef<HTMLDivElement>(null);
   const zoomClientRef = useRef<unknown>(null);
   const zoomMeetingIdRef = useRef<string | null>(null);
@@ -174,21 +176,23 @@ export default function App() {
     }
   };
 
-  const ZOOM_POPUP_WIDTH = 360;
-  const ZOOM_POPUP_HEIGHT = 280;
   const ZOOM_POPUP_PADDING = 24;
+  const ZOOM_POPUP_MIN_WIDTH = 280;
+  const ZOOM_POPUP_MIN_HEIGHT = 200;
+  const ZOOM_POPUP_MAX_WIDTH = 720;
+  const ZOOM_POPUP_MAX_HEIGHT = 560;
 
   useEffect(() => {
     if (inMeeting && currentPage !== 'meeting') {
       setZoomPopupPos({
-        x: window.innerWidth - ZOOM_POPUP_WIDTH - ZOOM_POPUP_PADDING,
-        y: window.innerHeight - ZOOM_POPUP_HEIGHT - ZOOM_POPUP_PADDING,
+        x: window.innerWidth - zoomPopupSize.width - ZOOM_POPUP_PADDING,
+        y: window.innerHeight - zoomPopupSize.height - ZOOM_POPUP_PADDING,
       });
     }
   }, [inMeeting, currentPage]);
 
   const onZoomPopupMouseDown = (e: React.MouseEvent) => {
-    if ((e.target as HTMLElement).closest('button')) return;
+    if ((e.target as HTMLElement).closest('button') || (e.target as HTMLElement).closest('[data-resize-handle]')) return;
     zoomDragRef.current = {
       isDragging: true,
       startX: e.clientX,
@@ -198,9 +202,30 @@ export default function App() {
     };
   };
 
+  const onZoomPopupResizeMouseDown = (e: React.MouseEvent) => {
+    e.preventDefault();
+    e.stopPropagation();
+    zoomResizeRef.current = {
+      isResizing: true,
+      startX: e.clientX,
+      startY: e.clientY,
+      startW: zoomPopupSize.width,
+      startH: zoomPopupSize.height,
+    };
+  };
+
   useEffect(() => {
     if (!inMeeting) return;
     const onMove = (e: MouseEvent) => {
+      if (zoomResizeRef.current.isResizing) {
+        const dw = e.clientX - zoomResizeRef.current.startX;
+        const dh = e.clientY - zoomResizeRef.current.startY;
+        setZoomPopupSize({
+          width: Math.min(ZOOM_POPUP_MAX_WIDTH, Math.max(ZOOM_POPUP_MIN_WIDTH, zoomResizeRef.current.startW + dw)),
+          height: Math.min(ZOOM_POPUP_MAX_HEIGHT, Math.max(ZOOM_POPUP_MIN_HEIGHT, zoomResizeRef.current.startH + dh)),
+        });
+        return;
+      }
       if (!zoomDragRef.current.isDragging) return;
       const dx = e.clientX - zoomDragRef.current.startX;
       const dy = e.clientY - zoomDragRef.current.startY;
@@ -209,7 +234,10 @@ export default function App() {
         y: Math.max(0, zoomDragRef.current.startTop + dy),
       });
     };
-    const onUp = () => { zoomDragRef.current.isDragging = false; };
+    const onUp = () => {
+      zoomDragRef.current.isDragging = false;
+      zoomResizeRef.current.isResizing = false;
+    };
     window.addEventListener('mousemove', onMove);
     window.addEventListener('mouseup', onUp);
     return () => {
@@ -217,6 +245,9 @@ export default function App() {
       window.removeEventListener('mouseup', onUp);
     };
   }, [inMeeting]);
+
+  const popupW = zoomPopupSize.width;
+  const popupH = zoomPopupSize.height;
 
   const checkSession = async () => {
     const savedToken = localStorage.getItem('accessToken');
@@ -662,8 +693,21 @@ export default function App() {
                 ? 'fixed left-32 right-8 top-6 bottom-6 opacity-0 pointer-events-none'
                 : 'fixed right-6 bottom-6 w-0 h-0 overflow-hidden opacity-0 pointer-events-none'
           }`}
-          style={inMeeting && currentPage !== 'meeting' ? { left: zoomPopupPos.x, top: zoomPopupPos.y, width: ZOOM_POPUP_WIDTH, height: ZOOM_POPUP_HEIGHT } : undefined}
+          style={inMeeting && currentPage !== 'meeting' ? { left: zoomPopupPos.x, top: zoomPopupPos.y, width: popupW, height: popupH } : undefined}
         >
+          {inMeeting && currentPage !== 'meeting' && (
+            <div
+              data-resize-handle
+              className="absolute right-0 bottom-0 w-4 h-4 cursor-nwse-resize resize-handle z-20"
+              onMouseDown={onZoomPopupResizeMouseDown}
+              role="presentation"
+              aria-label="Resize"
+            >
+              <svg className="absolute right-1 bottom-1 w-3 h-3 text-white/50" viewBox="0 0 16 16" fill="currentColor">
+                <path d="M15 15H9v-2h4V9h2v6zM7 15H1V9h2v4h4v2zM15 7V1H9v2h4v4h2zM7 1v2H3v4H1V1h6z" />
+              </svg>
+            </div>
+          )}
           {inMeeting && currentPage === 'meeting' && (
             <div className="absolute top-0 left-0 right-0 h-10 bg-black/60 flex items-center justify-end px-3 z-10">
               <button
