@@ -763,25 +763,6 @@ app.get("/ai/sessions", async (req, res) => {
 
 // Get specific session details
 app.get("/ai/sessions/:id", async (req, res) => {
-app.get("/friends/:id/todos", async (req, res) => {
-  try {
-    await requireUser(req);
-    const friendId = req.params.id;
-    const friendProfile = await kvGet(`user:${friendId}`);
-    if (!friendProfile) return res.status(404).json({ error: "User not found" });
-    if (!friendProfile.allowTodoView) {
-      return res.status(403).json({ error: "Todo sharing is disabled" });
-    }
-    const todos = await kvGetByPrefix(`todo:${friendId}:`);
-    const sharedTodos = (todos || []).filter((todo) => todo.shared);
-    return res.json({ todos: sharedTodos });
-  } catch {
-    return res.status(401).json({ error: "Unauthorized" });
-  }
-});
-
-// AI Study Assistant - File Upload
-app.post("/ai/upload", upload.single("file"), async (req, res) => {
   try {
     const user = await requireUser(req);
     const sessionId = req.params.id;
@@ -796,6 +777,24 @@ app.post("/ai/upload", upload.single("file"), async (req, res) => {
     if (String(err?.message).includes("Unauthorized"))
       return res.status(401).json({ error: "Unauthorized" });
     return res.status(500).json({ error: String(err?.message ?? err) });
+  }
+});
+
+// Get friend's shared todos
+app.get("/friends/:id/todos", async (req, res) => {
+  try {
+    await requireUser(req);
+    const friendId = req.params.id;
+    const friendProfile = await kvGet(`user:${friendId}`);
+    if (!friendProfile) return res.status(404).json({ error: "User not found" });
+    if (!friendProfile.allowTodoView) {
+      return res.status(403).json({ error: "Todo sharing is disabled" });
+    }
+    const todos = await kvGetByPrefix(`todo:${friendId}:`);
+    const sharedTodos = (todos || []).filter((todo) => todo.shared);
+    return res.json({ todos: sharedTodos });
+  } catch {
+    return res.status(401).json({ error: "Unauthorized" });
   }
 });
 
