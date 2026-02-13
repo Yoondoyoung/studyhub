@@ -1110,6 +1110,10 @@ export default function App() {
               onBack={() => navigateTo('study-groups')}
               onLeaveRoom={() => setRoomUserIsIn(null)}
               onJoinMeeting={openMeetingLauncher}
+              onStartAiReview={(sessionId) => {
+                setSelectedSessionId(sessionId);
+                navigateTo('solo-study');
+              }}
             />
           )}
           {currentPage === 'meeting' && currentMeetingId && (

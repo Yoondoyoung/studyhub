@@ -1599,6 +1599,18 @@ const processFileContent = async (file) => {
   return { content, fileType, base64Data };
 };
 
+const buildSessionFilesContext = (files = []) => {
+  return (files || [])
+    .map((f) => {
+      const name = String(f?.fileName || "material");
+      const content = String(f?.content || "");
+      // Quiz review files are intentionally longer; include more so all questions are available to AI.
+      const perFileLimit = /quiz-review/i.test(name) ? 16000 : 4000;
+      return `[File: ${name}]\n${content.substring(0, perFileLimit)}`;
+    })
+    .join("\n\n");
+};
+
 // Create a new study session
 app.post("/ai/sessions", async (req, res) => {
   try {
@@ -1880,9 +1892,7 @@ app.post("/ai/sessions/:id/chat", async (req, res) => {
     // Build context from session files
     let filesContext = "";
     if (session.files && session.files.length > 0) {
-      filesContext = session.files
-        .map(f => `[File: ${f.fileName}]\n${f.content.substring(0, 2000)}`)
-        .join("\n\n");
+      filesContext = buildSessionFilesContext(session.files);
     }
 
     let systemPrompt = "";
@@ -2104,9 +2114,7 @@ app.post("/ai/sessions/:id/voice-chat", upload.single("audio"), async (req, res)
     // Step 2: Build context from session files
     let filesContext = "";
     if (session.files && session.files.length > 0) {
-      filesContext = session.files
-        .map(f => `[File: ${f.fileName}]\n${f.content.substring(0, 2000)}`)
-        .join("\n\n");
+      filesContext = buildSessionFilesContext(session.files);
     }
 
     let systemPrompt = "";
@@ -2824,6 +2832,119 @@ app.get("/study-groups/:groupId/quiz/results", async (req, res) => {
   }
 });
 
+// Create personal AI review session from group quiz results
+app.post("/study-groups/:groupId/quiz/review-session", async (req, res) => {
+  try {
+    const user = await requireUser(req);
+    const { groupId } = req.params;
+    const group = await kvGet(`study-group:${groupId}`);
+    if (!group) {
+      return res.status(404).json({ error: "Group not found" });
+    }
+    if (!group.participants?.includes(user.id)) {
+      return res.status(403).json({ error: "Only group participants can create review sessions" });
+    }
+
+    const quizSession = await kvGet(`group-quiz:${groupId}`);
+    if (!quizSession?.quiz?.questions?.length) {
+      return res.status(400).json({ error: "Quiz not found" });
+    }
+
+    const questions = quizSession.quiz.questions || [];
+    const allAnswers = quizSession.answers || {};
+    const myAnswers = allAnswers[user.id] || {};
+
+    const total = questions.length;
+    let correct = 0;
+    let incorrect = 0;
+    let unanswered = 0;
+
+    const lines = [];
+    lines.push(`# Group Quiz Review`);
+    lines.push(``);
+    lines.push(`- Group: ${group.topic || groupId}`);
+    lines.push(`- Generated at: ${new Date().toISOString()}`);
+    lines.push(`- Total questions: ${total}`);
+    lines.push(``);
+    lines.push(`## Question Review`);
+    lines.push(``);
+
+    for (let i = 0; i < questions.length; i++) {
+      const q = questions[i];
+      const questionId = q.id;
+      const myAnswer = myAnswers[questionId];
+      const hasAnswer = myAnswer !== undefined && myAnswer !== null;
+      const isCorrect = hasAnswer && Number(myAnswer) === Number(q.correctAnswer);
+      if (!hasAnswer) unanswered++;
+      else if (isCorrect) correct++;
+      else incorrect++;
+
+      lines.push(`### Q${i + 1}. ${q.question}`);
+      lines.push(``);
+      if (Array.isArray(q.options)) {
+        for (let idx = 0; idx < q.options.length; idx++) {
+          const marker = idx === q.correctAnswer ? " (Correct)" : "";
+          lines.push(`- ${String.fromCharCode(65 + idx)}. ${q.options[idx]}${marker}`);
+        }
+      }
+      lines.push(`- My answer: ${hasAnswer ? String.fromCharCode(65 + Number(myAnswer)) : "No answer"}`);
+      lines.push(`- Result: ${hasAnswer ? (isCorrect ? "Correct" : "Incorrect") : "Unanswered"}`);
+      lines.push(`- Explanation: ${q.explanation || "No explanation provided."}`);
+      lines.push(``);
+    }
+
+    lines.splice(6, 0, `- Score summary: ${correct} correct / ${incorrect} incorrect / ${unanswered} unanswered`);
+
+    // Keep up to 5 sessions by deleting the oldest one before creating a new one.
+    const allSessions = await kvGetByPrefix(`ai-session:${user.id}:`);
+    if (allSessions.length >= 5) {
+      const sorted = allSessions.sort((a, b) => new Date(a.createdAt) - new Date(b.createdAt));
+      const oldest = sorted[0];
+      await kvDel(`ai-session:${user.id}:${oldest.id}`);
+    }
+
+    const sessionId = crypto.randomUUID();
+    const now = new Date();
+    const session = {
+      id: sessionId,
+      userId: user.id,
+      name: `Quiz Review - ${group.topic || "Group Study"}`,
+      files: [],
+      studentChatHistory: [],
+      teachChatHistory: [],
+      createdAt: now.toISOString(),
+      updatedAt: now.toISOString(),
+    };
+
+    const fileId = crypto.randomUUID();
+    const reviewFile = {
+      id: fileId,
+      fileName: `quiz-review-${groupId}-${now.toISOString().slice(0, 10)}.md`,
+      fileType: "text",
+      content: lines.join("\n"),
+      uploadedAt: now.toISOString(),
+    };
+    session.files.push(reviewFile);
+
+    await kvSet(`ai-session:${user.id}:${sessionId}`, session);
+    await kvSet(`active-session:${user.id}`, sessionId);
+
+    return res.json({
+      success: true,
+      sessionId,
+      sessionName: session.name,
+      fileName: reviewFile.fileName,
+      summary: { total, correct, incorrect, unanswered },
+    });
+  } catch (err) {
+    console.error("Create quiz review session error:", err);
+    if (String(err?.message).includes("Unauthorized")) {
+      return res.status(401).json({ error: "Unauthorized" });
+    }
+    return res.status(500).json({ error: String(err?.message ?? err) });
+  }
+});
+
 // Get active study material
 app.get("/ai/material", async (req, res) => {
   try {
@@ -2853,9 +2974,40 @@ app.get("/settings", async (req, res) => {
   try {
     const user = await requireUser(req);
     const userProfile = await kvGet(`user:${user.id}`);
-    return res.json({ settings: userProfile });
+    return res.json({ success: true, settings: userProfile });
   } catch {
     return res.status(401).json({ error: "Unauthorized" });
+  }
+});
+
+app.post("/settings/upload-image", upload.single("image"), async (req, res) => {
+  try {
+    const user = await requireUser(req);
+    const userProfile = await kvGet(`user:${user.id}`);
+    const file = req.file;
+    if (!file) {
+      return res.status(400).json({ error: "Image file is required" });
+    }
+    if (!String(file.mimetype || "").startsWith("image/")) {
+      return res.status(400).json({ error: "Only image files are allowed" });
+    }
+
+    // Normalize uploads to a compact JPEG so we can store it safely in user profile JSON.
+    const optimized = await sharp(file.buffer)
+      .rotate()
+      .resize(512, 512, { fit: "cover" })
+      .jpeg({ quality: 82 })
+      .toBuffer();
+
+    const imageUrl = `data:image/jpeg;base64,${optimized.toString("base64")}`;
+    const updated = { ...userProfile, profileImageUrl: imageUrl };
+    await kvSet(`user:${user.id}`, updated);
+    return res.json({ success: true, imageUrl });
+  } catch (err) {
+    if (String(err?.message).includes("Unauthorized")) {
+      return res.status(401).json({ error: "Unauthorized" });
+    }
+    return res.status(500).json({ error: String(err?.message ?? err) });
   }
 });
 
@@ -2865,7 +3017,7 @@ app.put("/settings", async (req, res) => {
     const userProfile = await kvGet(`user:${user.id}`);
     const updated = { ...userProfile, ...(req.body ?? {}) };
     await kvSet(`user:${user.id}`, updated);
-    return res.json({ settings: updated });
+    return res.json({ success: true, settings: updated });
   } catch {
     return res.status(401).json({ error: "Unauthorized" });
   }

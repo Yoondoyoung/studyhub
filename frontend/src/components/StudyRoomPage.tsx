@@ -42,6 +42,7 @@ interface StudyRoomPageProps {
   onBack: () => void;
   onLeaveRoom?: () => void;
   onJoinMeeting?: (meetingId: string) => void;
+  onStartAiReview?: (sessionId: string) => void;
 }
 
 interface UploadedFile {
@@ -97,7 +98,8 @@ export function StudyRoomPage({
   currentUserId,
   onBack,
   onLeaveRoom,
-  onJoinMeeting
+  onJoinMeeting,
+  onStartAiReview,
 }: StudyRoomPageProps) {
   const glassPanelClass =
     'bg-white/80 backdrop-blur border border-white/70 shadow-[0_16px_40px_rgba(15,23,42,0.10)]';
@@ -127,6 +129,7 @@ export function StudyRoomPage({
   const [quizCount, setQuizCount] = useState(25);
   const [quizDifficulty, setQuizDifficulty] = useState<'easy' | 'medium' | 'hard'>('medium');
   const [showQuizCompleted, setShowQuizCompleted] = useState(false);
+  const [isCreatingAiReview, setIsCreatingAiReview] = useState(false);
   const [currentTime, setCurrentTime] = useState(new Date());
   const [completionStatus, setCompletionStatus] = useState<{ completed: number; total: number; allCompleted: boolean }>({ completed: 0, total: 0, allCompleted: false });
   const fileInputRef = useRef<HTMLInputElement>(null);
@@ -146,7 +149,7 @@ export function StudyRoomPage({
 
   // Timer interval
   useEffect(() => {
-    let interval: NodeJS.Timeout | undefined;
+    let interval: ReturnType<typeof setInterval> | undefined;
     if (isTimerRunning && timerStartTime) {
       interval = setInterval(() => {
         const elapsed = Math.floor((Date.now() - timerStartTime) / 1000);
@@ -539,6 +542,31 @@ export function StudyRoomPage({
     }
   };
 
+  const handleStartAiReview = async () => {
+    setIsCreatingAiReview(true);
+    try {
+      const res = await fetch(`${apiBase}/study-groups/${groupId}/quiz/review-session`, {
+        method: 'POST',
+        headers: auth(accessToken),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok || !data?.success || !data?.sessionId) {
+        throw new Error(String(data?.error || 'Failed to create AI review session'));
+      }
+      toast.success('AI review session created. Opening AI Study...');
+      if (onStartAiReview) {
+        onStartAiReview(String(data.sessionId));
+      } else {
+        window.location.hash = 'solo-study';
+      }
+    } catch (error) {
+      console.error('Create AI review session error:', error);
+      toast.error(error instanceof Error ? error.message : 'Failed to create AI review session');
+    } finally {
+      setIsCreatingAiReview(false);
+    }
+  };
+
   const startRoomTimer = async () => {
     try {
       await fetch(`${apiBase}/study/timer/start`, {
@@ -795,6 +823,25 @@ export function StudyRoomPage({
 
                 <div className="space-y-3">
                   <Button
+                    variant="secondary"
+                    onClick={handleStartAiReview}
+                    size="lg"
+                    className="w-full"
+                    disabled={isCreatingAiReview}
+                  >
+                    {isCreatingAiReview ? (
+                      <>
+                        <Loader2 className="size-5 mr-2 animate-spin" />
+                        Creating AI Review...
+                      </>
+                    ) : (
+                      <>
+                        <BookOpen className="size-5 mr-2" />
+                        Start AI Review
+                      </>
+                    )}
+                  </Button>
+                  <Button
                     onClick={handleViewResults}
                     size="lg"
                     className="w-full"
@@ -884,10 +931,30 @@ export function StudyRoomPage({
               </div>
 
               <div className="mt-6 pt-6 border-t text-center">
-                <Button onClick={() => setShowQuizSettings(true)} size="lg">
-                  <BookOpen className="size-5 mr-2" />
-                  Start New Quiz
-                </Button>
+                <div className="flex items-center justify-center gap-3">
+                  <Button
+                    variant="secondary"
+                    onClick={handleStartAiReview}
+                    size="lg"
+                    disabled={isCreatingAiReview}
+                  >
+                    {isCreatingAiReview ? (
+                      <>
+                        <Loader2 className="size-5 mr-2 animate-spin" />
+                        Creating AI Review...
+                      </>
+                    ) : (
+                      <>
+                        <BookOpen className="size-5 mr-2" />
+                        Start AI Review
+                      </>
+                    )}
+                  </Button>
+                  <Button onClick={() => setShowQuizSettings(true)} size="lg">
+                    <BookOpen className="size-5 mr-2" />
+                    Start New Quiz
+                  </Button>
+                </div>
               </div>
             </div>
           ) : quiz ? (
