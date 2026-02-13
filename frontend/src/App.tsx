@@ -5,7 +5,6 @@ import { RegisterPage, RegisterData } from './components/RegisterPage';
 import { DashboardPage } from './components/DashboardPage';
 import { StudyGroupsPage } from './components/StudyGroupsPage';
 import { SoloStudyPage } from './components/SoloStudyPage';
-import { FriendsPage } from './components/FriendsPage';
 import { FriendDetailPage } from './components/FriendDetailPage';
 import { ProfilePage } from './components/ProfilePage';
 import { StudyRoomPage } from './components/StudyRoomPage';
@@ -18,7 +17,6 @@ import { Avatar, AvatarFallback, AvatarImage } from './components/ui/avatar';
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from './components/ui/dialog';
 import { 
   LayoutDashboard, 
-  Users, 
   BookOpen, 
   UserCircle, 
   LogOut,
@@ -58,9 +56,9 @@ const StudyGroupIcon = ({ className }: { className?: string }) => (
 );
 import { toast } from 'sonner';
 
-type Page = 'login' | 'register' | 'dashboard' | 'study-groups' | 'solo-study' | 'friends' | 'profile' | 'friend-detail' | 'room' | 'meeting' | 'calendar';
+type Page = 'login' | 'register' | 'dashboard' | 'study-groups' | 'solo-study' | 'profile' | 'friend-detail' | 'room' | 'meeting' | 'calendar';
 
-const APP_PAGES: Page[] = ['dashboard', 'study-groups', 'solo-study', 'friends', 'calendar'];
+const APP_PAGES: Page[] = ['dashboard', 'study-groups', 'solo-study', 'calendar'];
 
 function getPageFromHash(): Page {
   const hash = window.location.hash.slice(1);
@@ -110,12 +108,6 @@ interface ChatMessage {
   pending?: boolean;
 }
 
-interface FriendRequest {
-  requesterId: string;
-  createdAt: string;
-  requester?: Friend;
-}
-
 interface StudySession {
   id: string;
   name: string;
@@ -147,7 +139,6 @@ export default function App() {
   const [chatPanelOpen, setChatPanelOpen] = useState(false);
   const [recentChatFriends, setRecentChatFriends] = useState<Friend[]>([]);
   const [chatNotifications, setChatNotifications] = useState<Record<string, boolean>>({});
-  const [incomingFriendRequestCount, setIncomingFriendRequestCount] = useState(0);
   const socketRef = useRef<WebSocket | null>(null);
   const friendsRef = useRef<Friend[]>([]);
   const chatFriendRef = useRef<Friend | null>(null);
@@ -560,20 +551,6 @@ export default function App() {
     navigateTo('solo-study');
   };
 
-  const fetchIncomingFriendRequestCount = async () => {
-    if (!accessToken) return;
-    try {
-      const response = await fetch(`${apiBase}/friends/requests`, {
-        headers: { Authorization: `Bearer ${accessToken}` }
-      });
-      const data = await response.json();
-      const requests = Array.isArray(data.requests) ? (data.requests as FriendRequest[]) : [];
-      setIncomingFriendRequestCount(requests.length);
-    } catch (error) {
-      console.error('Failed to fetch friend requests:', error);
-    }
-  };
-
   const handleDeleteSession = async (sessionId: string, e: React.MouseEvent) => {
     e.stopPropagation();
     
@@ -773,13 +750,6 @@ export default function App() {
   }, [accessToken]);
 
   useEffect(() => {
-    if (!accessToken) return;
-    fetchIncomingFriendRequestCount();
-    const interval = setInterval(fetchIncomingFriendRequestCount, 10000);
-    return () => clearInterval(interval);
-  }, [accessToken]);
-
-  useEffect(() => {
     friendsRef.current = friends;
   }, [friends]);
 
@@ -841,7 +811,6 @@ export default function App() {
         if (payload?.type === 'friend:request') {
           const senderName = payload?.request?.requester?.username || 'Someone';
           toast.info(`${senderName} sent you a friend request.`);
-          setIncomingFriendRequestCount((prev) => prev + 1);
           return;
         }
 
@@ -925,9 +894,6 @@ export default function App() {
       </>
     );
   }
-
-  const unreadChatCount = Object.values(chatNotifications).filter(Boolean).length;
-  const totalFriendAlerts = incomingFriendRequestCount + unreadChatCount;
 
   return (
     <div className="min-h-screen bg-gradient-to-br from-[#eaf5ff] via-[#f7f9ff] to-[#fde9f1] flex">
@@ -1026,25 +992,6 @@ export default function App() {
             )}
           </div>
           
-          <div className="relative">
-            <button
-              onClick={() => navigateTo('friends')}
-              className={`size-12 rounded-full flex items-center justify-center transition-colors ${
-                currentPage === 'friends'
-                  ? 'bg-black text-white shadow-md'
-                  : 'bg-white text-gray-600 hover:bg-gray-100'
-              }`}
-              title="Friends"
-            >
-              <Users className="size-5" />
-            </button>
-            {totalFriendAlerts > 0 ? (
-              <span className="absolute -top-1 -right-1 min-w-[18px] h-[18px] px-1 rounded-full bg-rose-500 text-white text-[10px] font-semibold flex items-center justify-center">
-                {totalFriendAlerts > 99 ? '99+' : totalFriendAlerts}
-              </span>
-            ) : null}
-          </div>
-
           <button
             onClick={() => navigateTo('calendar')}
             className={`size-12 rounded-full flex items-center justify-center transition-colors ${
@@ -1092,11 +1039,11 @@ export default function App() {
             {currentPage === 'friend-detail' && selectedFriend ? (
               <Button
                 variant="ghost"
-                onClick={() => setCurrentPage('friends')}
+                onClick={() => navigateTo('dashboard')}
                 className="rounded-xl text-gray-600 hover:text-gray-900"
               >
                 <ArrowLeft className="size-4 mr-2" />
-                Back to friends
+                Back to dashboard
               </Button>
             ) : null}
           </div>
@@ -1144,16 +1091,6 @@ export default function App() {
             <SoloStudyPage 
               initialSessionId={selectedSessionId}
               onSessionsChange={loadAiStudySessions}
-            />
-          )}
-          {currentPage === 'friends' && (
-            <FriendsPage
-              accessToken={accessToken}
-              onRequestsUpdated={fetchIncomingFriendRequestCount}
-              onViewFriend={(friend) => {
-                setSelectedFriend(friend);
-                setCurrentPage('friend-detail');
-              }}
             />
           )}
           {currentPage === 'calendar' && (
