@@ -11,6 +11,7 @@ import { SettingsPage } from './components/SettingsPage';
 import { ProfilePage } from './components/ProfilePage';
 import { StudyRoomPage } from './components/StudyRoomPage';
 import { MeetingPage } from './components/MeetingPage';
+import { CalendarPage } from './components/CalendarPage';
 import { Toaster } from './components/ui/sonner';
 import { Button } from './components/ui/button';
 import { Input } from './components/ui/input';
@@ -24,7 +25,8 @@ import {
   LogOut,
   GraduationCap,
   MoreVertical,
-  Trash2
+  Trash2,
+  Calendar
 } from 'lucide-react';
 
 // Custom icon for Study Groups (people with book)
@@ -56,9 +58,9 @@ const StudyGroupIcon = ({ className }: { className?: string }) => (
 );
 import { toast } from 'sonner';
 
-type Page = 'login' | 'register' | 'dashboard' | 'study-groups' | 'solo-study' | 'friends' | 'settings' | 'profile' | 'friend-detail' | 'room' | 'meeting';
+type Page = 'login' | 'register' | 'dashboard' | 'study-groups' | 'solo-study' | 'friends' | 'settings' | 'profile' | 'friend-detail' | 'room' | 'meeting' | 'calendar';
 
-const APP_PAGES: Page[] = ['dashboard', 'study-groups', 'solo-study', 'friends', 'settings'];
+const APP_PAGES: Page[] = ['dashboard', 'study-groups', 'solo-study', 'friends', 'calendar', 'settings'];
 
 function getPageFromHash(): Page {
   const hash = window.location.hash.slice(1);
@@ -955,6 +957,18 @@ export default function App() {
           >
             <Users className="size-5" />
           </button>
+
+          <button
+            onClick={() => navigateTo('calendar')}
+            className={`size-12 rounded-full flex items-center justify-center transition-colors ${
+              currentPage === 'calendar'
+                ? 'bg-black text-white shadow-md'
+                : 'bg-white text-gray-600 hover:bg-gray-100'
+            }`}
+            title="Calendar"
+          >
+            <Calendar className="size-5" />
+          </button>
         </nav>
 
         <div className="flex flex-col items-center gap-4">
@@ -1049,6 +1063,9 @@ export default function App() {
                 setCurrentPage('friend-detail');
               }}
             />
+          )}
+          {currentPage === 'calendar' && (
+            <CalendarPage accessToken={accessToken} />
           )}
           {currentPage === 'settings' && (
             <SettingsPage
