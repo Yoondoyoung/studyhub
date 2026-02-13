@@ -72,6 +72,22 @@ const kvGet = async (key) => {
   return data?.value;
 };
 
+const kvGetMany = async (keys) => {
+  const uniqueKeys = Array.from(new Set((keys ?? []).filter(Boolean)));
+  if (!uniqueKeys.length) return {};
+  const { data, error } = await serviceSupabase
+    .from(KV_TABLE)
+    .select("key, value")
+    .in("key", uniqueKeys);
+  if (error) throw new Error(error.message);
+  const map = {};
+  for (const row of data ?? []) {
+    if (!row?.key) continue;
+    map[row.key] = row.value;
+  }
+  return map;
+};
+
 const kvDel = async (key) => {
   const { error } = await serviceSupabase.from(KV_TABLE).delete().eq("key", key);
   if (error) throw new Error(error.message);
@@ -871,21 +887,38 @@ app.get("/study-time-range", async (req, res) => {
 app.get("/study-groups", async (_req, res) => {
   try {
     const raw = await kvGetByPrefix("study-group:");
-    const groups = [];
+    const userKeys = [];
+    const userKeySet = new Set();
     for (const group of raw) {
-      if (applyNoShowCleanup(group)) await kvSet(`study-group:${group.id}`, group);
-      const hostProfile = group.hostId ? await kvGet(`user:${group.hostId}`) : null;
-      const hostUsername = hostProfile?.username ?? hostProfile?.email ?? (group.hostId?.slice(0, 8) ?? "—");
+      if (group?.hostId) userKeySet.add(`user:${group.hostId}`);
+      for (const id of group?.applicants || []) userKeySet.add(`user:${id}`);
+    }
+    userKeys.push(...userKeySet);
+    const usersByKey = await kvGetMany(userKeys);
+
+    const groups = [];
+    const cleanupWrites = [];
+    for (const group of raw) {
+      if (applyNoShowCleanup(group)) cleanupWrites.push(kvSet(`study-group:${group.id}`, group));
+      const hostKey = group?.hostId ? `user:${group.hostId}` : null;
+      const hostProfile = hostKey ? usersByKey[hostKey] : null;
+      const hostUsername =
+        hostProfile?.username ??
+        hostProfile?.email ??
+        (group.hostId?.slice(0, 8) ?? "—");
+
       const applicantsWithNames = [];
       for (const id of group.applicants || []) {
-        const profile = await kvGet(`user:${id}`);
+        const profile = usersByKey[`user:${id}`] ?? null;
         applicantsWithNames.push({
           id,
           username: profile?.username ?? profile?.email ?? id.slice(0, 8),
         });
       }
+
       groups.push({ ...group, hostUsername, applicantsWithNames });
     }
+    if (cleanupWrites.length) await Promise.allSettled(cleanupWrites);
     return res.json({ groups });
   } catch (err) {
     return res.status(500).json({ error: String(err?.message ?? err) });
