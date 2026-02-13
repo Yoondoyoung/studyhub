@@ -5,7 +5,6 @@ import { RegisterPage, RegisterData } from './components/RegisterPage';
 import { DashboardPage } from './components/DashboardPage';
 import { StudyGroupsPage } from './components/StudyGroupsPage';
 import { SoloStudyPage } from './components/SoloStudyPage';
-import { FriendsPage } from './components/FriendsPage';
 import { FriendDetailPage } from './components/FriendDetailPage';
 import { ProfilePage } from './components/ProfilePage';
 import { StudyRoomPage } from './components/StudyRoomPage';
@@ -18,14 +17,14 @@ import { Avatar, AvatarFallback, AvatarImage } from './components/ui/avatar';
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from './components/ui/dialog';
 import { 
   LayoutDashboard, 
-  Users, 
   BookOpen, 
   UserCircle, 
   LogOut,
   GraduationCap,
   MoreVertical,
   Trash2,
-  Calendar
+  Calendar,
+  ArrowLeft
 } from 'lucide-react';
 
 // Custom icon for Study Groups (people with book)
@@ -57,9 +56,9 @@ const StudyGroupIcon = ({ className }: { className?: string }) => (
 );
 import { toast } from 'sonner';
 
-type Page = 'login' | 'register' | 'dashboard' | 'study-groups' | 'solo-study' | 'friends' | 'profile' | 'friend-detail' | 'room' | 'meeting' | 'calendar';
+type Page = 'login' | 'register' | 'dashboard' | 'study-groups' | 'solo-study' | 'profile' | 'friend-detail' | 'room' | 'meeting' | 'calendar';
 
-const APP_PAGES: Page[] = ['dashboard', 'study-groups', 'solo-study', 'friends', 'calendar'];
+const APP_PAGES: Page[] = ['dashboard', 'study-groups', 'solo-study', 'calendar'];
 
 function getPageFromHash(): Page {
   const hash = window.location.hash.slice(1);
@@ -109,12 +108,6 @@ interface ChatMessage {
   pending?: boolean;
 }
 
-interface FriendRequest {
-  requesterId: string;
-  createdAt: string;
-  requester?: Friend;
-}
-
 interface StudySession {
   id: string;
   name: string;
@@ -146,7 +139,6 @@ export default function App() {
   const [chatPanelOpen, setChatPanelOpen] = useState(false);
   const [recentChatFriends, setRecentChatFriends] = useState<Friend[]>([]);
   const [chatNotifications, setChatNotifications] = useState<Record<string, boolean>>({});
-  const [incomingFriendRequestCount, setIncomingFriendRequestCount] = useState(0);
   const socketRef = useRef<WebSocket | null>(null);
   const friendsRef = useRef<Friend[]>([]);
   const chatFriendRef = useRef<Friend | null>(null);
@@ -559,20 +551,6 @@ export default function App() {
     navigateTo('solo-study');
   };
 
-  const fetchIncomingFriendRequestCount = async () => {
-    if (!accessToken) return;
-    try {
-      const response = await fetch(`${apiBase}/friends/requests`, {
-        headers: { Authorization: `Bearer ${accessToken}` }
-      });
-      const data = await response.json();
-      const requests = Array.isArray(data.requests) ? (data.requests as FriendRequest[]) : [];
-      setIncomingFriendRequestCount(requests.length);
-    } catch (error) {
-      console.error('Failed to fetch friend requests:', error);
-    }
-  };
-
   const handleDeleteSession = async (sessionId: string, e: React.MouseEvent) => {
     e.stopPropagation();
     
@@ -772,13 +750,6 @@ export default function App() {
   }, [accessToken]);
 
   useEffect(() => {
-    if (!accessToken) return;
-    fetchIncomingFriendRequestCount();
-    const interval = setInterval(fetchIncomingFriendRequestCount, 10000);
-    return () => clearInterval(interval);
-  }, [accessToken]);
-
-  useEffect(() => {
     friendsRef.current = friends;
   }, [friends]);
 
@@ -840,7 +811,6 @@ export default function App() {
         if (payload?.type === 'friend:request') {
           const senderName = payload?.request?.requester?.username || 'Someone';
           toast.info(`${senderName} sent you a friend request.`);
-          setIncomingFriendRequestCount((prev) => prev + 1);
           return;
         }
 
@@ -925,77 +895,86 @@ export default function App() {
     );
   }
 
-  const unreadChatCount = Object.values(chatNotifications).filter(Boolean).length;
-  const totalFriendAlerts = incomingFriendRequestCount + unreadChatCount;
-
   return (
     <div className="min-h-screen bg-gradient-to-br from-[#eaf5ff] via-[#f7f9ff] to-[#fde9f1] flex">
       {/* Sidebar */}
-      <aside className="fixed left-6 top-6 bottom-6 w-20 bg-white/90 backdrop-blur rounded-[32px] shadow-xl flex flex-col items-center py-8">
-        <div className="size-12 rounded-2xl bg-[#e9f6ff] flex items-center justify-center">
-          <GraduationCap className="size-6 text-gray-800" />
+      <aside className="group/sidebar fixed left-6 top-6 bottom-6 w-20 hover:w-64 bg-white/90 backdrop-blur rounded-[32px] shadow-xl flex flex-col py-8 px-3 transition-all duration-300 overflow-visible">
+        <div className="h-12 flex items-center justify-center group-hover/sidebar:justify-start transition-all">
+          <div className="size-12 rounded-2xl bg-[#e9f6ff] flex items-center justify-center shrink-0">
+            <GraduationCap className="size-6 text-gray-800" />
+          </div>
         </div>
 
-        <nav className="mt-10 flex flex-col items-center gap-5 flex-1">
+        <nav className="mt-10 flex flex-col gap-3 flex-1">
           <button
             onClick={() => navigateTo('dashboard')}
-            className={`size-12 rounded-full flex items-center justify-center transition-colors ${
+            className="w-full rounded-xl px-1.5 py-1 flex items-center gap-3 hover:bg-gray-50 transition-colors"
+            title="Dashboard"
+          >
+            <span className={`size-10 rounded-full flex items-center justify-center shrink-0 transition-colors ${
               currentPage === 'dashboard'
                 ? 'bg-black text-white shadow-md'
-                : 'bg-white text-gray-600 hover:bg-gray-100'
-            }`}
-            title="Home"
-          >
-            <LayoutDashboard className="size-5" />
+                : 'bg-white text-gray-600'
+            }`}>
+              <LayoutDashboard className="size-5" />
+            </span>
+            <span className="text-sm font-medium text-gray-700 whitespace-nowrap overflow-hidden max-w-0 opacity-0 translate-x-1 group-hover/sidebar:max-w-[140px] group-hover/sidebar:opacity-100 group-hover/sidebar:translate-x-0 transition-all duration-200">
+              Dashboard
+            </span>
           </button>
 
           <button
             onClick={() => navigateTo('study-groups')}
-            className={`size-12 rounded-full flex items-center justify-center transition-colors ${
+            className="w-full rounded-xl px-1.5 py-1 flex items-center gap-3 hover:bg-gray-50 transition-colors"
+            title="Group Study"
+          >
+            <span className={`size-10 rounded-full flex items-center justify-center shrink-0 transition-colors ${
               currentPage === 'study-groups'
                 ? 'bg-black text-white shadow-md'
-                : 'bg-white text-gray-600 hover:bg-gray-100'
-            }`}
-            title="Study groups"
-          >
-            <StudyGroupIcon className="size-5" />
+                : 'bg-white text-gray-600'
+            }`}>
+              <StudyGroupIcon className="size-5" />
+            </span>
+            <span className="text-sm font-medium text-gray-700 whitespace-nowrap overflow-hidden max-w-0 opacity-0 translate-x-1 group-hover/sidebar:max-w-[140px] group-hover/sidebar:opacity-100 group-hover/sidebar:translate-x-0 transition-all duration-200">
+              Group Study
+            </span>
           </button>
           
-          <div className="relative">
+          <div
+            className="w-full"
+            onMouseEnter={() => {
+              setShowAiStudyDropdown(true);
+              loadAiStudySessions();
+            }}
+            onMouseLeave={() => setShowAiStudyDropdown(false)}
+          >
             <button
-              onMouseEnter={() => {
-                setShowAiStudyDropdown(true);
-                loadAiStudySessions();
-              }}
               onClick={handleAiStudyClick}
-              className={`size-12 rounded-full flex items-center justify-center transition-colors ${
+              className="w-full rounded-xl px-1.5 py-1 flex items-center gap-3 hover:bg-gray-50 transition-colors"
+              title="AI Study"
+            >
+              <span className={`size-10 rounded-full flex items-center justify-center shrink-0 transition-colors ${
                 currentPage === 'solo-study'
                   ? 'bg-black text-white shadow-md'
-                  : 'bg-white text-gray-600 hover:bg-gray-100'
-              }`}
-              title="AI study"
-            >
-              <BookOpen className="size-5" />
+                  : 'bg-white text-gray-600'
+              }`}>
+                <BookOpen className="size-5" />
+              </span>
+              <span className="text-sm font-medium text-gray-700 whitespace-nowrap overflow-hidden max-w-0 opacity-0 translate-x-1 group-hover/sidebar:max-w-[140px] group-hover/sidebar:opacity-100 group-hover/sidebar:translate-x-0 transition-all duration-200">
+                AI Study
+              </span>
             </button>
 
-            {/* Expanded session list with animation */}
-            {showAiStudyDropdown && aiStudySessions.length > 0 && (
-              <div 
-                className="absolute left-16 top-1/2 -translate-y-1/2 w-44 space-y-0.5 overflow-hidden rounded-xl bg-white shadow-lg p-2"
-                onMouseLeave={() => setShowAiStudyDropdown(false)}
-                style={{
-                  animation: 'slideDown 0.2s ease-out'
-                }}
-              >
-                {aiStudySessions.map((session, index) => (
-                  <div
-                    key={session.id}
-                    className="relative group"
-                    style={{ 
-                      animation: `fadeInSlide 0.3s ease-out ${index * 0.05}s forwards`,
-                      opacity: 0
-                    }}
-                  >
+            <div
+              className={`overflow-hidden transition-all duration-300 ease-out ${
+                showAiStudyDropdown && aiStudySessions.length > 0
+                  ? 'max-h-80 opacity-100 mt-2'
+                  : 'max-h-0 opacity-0 mt-0'
+              }`}
+            >
+              <div className="w-full space-y-0.5 rounded-xl bg-white shadow-sm border border-gray-100 p-2">
+                {aiStudySessions.map((session) => (
+                  <div key={session.id} className="relative group">
                     <button
                       onClick={() => handleSessionSelect(session.id)}
                       className="w-full text-left px-3 py-2 pr-8 rounded-md hover:bg-gray-50 transition-all duration-150 text-xs"
@@ -1022,55 +1001,56 @@ export default function App() {
                   </div>
                 ))}
               </div>
-            )}
+            </div>
           </div>
           
-          <div className="relative">
-            <button
-              onClick={() => navigateTo('friends')}
-              className={`size-12 rounded-full flex items-center justify-center transition-colors ${
-                currentPage === 'friends'
-                  ? 'bg-black text-white shadow-md'
-                  : 'bg-white text-gray-600 hover:bg-gray-100'
-              }`}
-              title="Friends"
-            >
-              <Users className="size-5" />
-            </button>
-            {totalFriendAlerts > 0 ? (
-              <span className="absolute -top-1 -right-1 min-w-[18px] h-[18px] px-1 rounded-full bg-rose-500 text-white text-[10px] font-semibold flex items-center justify-center">
-                {totalFriendAlerts > 99 ? '99+' : totalFriendAlerts}
-              </span>
-            ) : null}
-          </div>
-
           <button
             onClick={() => navigateTo('calendar')}
-            className={`size-12 rounded-full flex items-center justify-center transition-colors ${
-              currentPage === 'calendar'
-                ? 'bg-black text-white shadow-md'
-                : 'bg-white text-gray-600 hover:bg-gray-100'
-            }`}
+            className="w-full rounded-xl px-1.5 py-1 flex items-center gap-3 hover:bg-gray-50 transition-colors"
             title="Calendar"
           >
-            <Calendar className="size-5" />
+            <span className={`size-10 rounded-full flex items-center justify-center shrink-0 transition-colors ${
+              currentPage === 'calendar'
+                ? 'bg-black text-white shadow-md'
+                : 'bg-white text-gray-600'
+            }`}>
+              <Calendar className="size-5" />
+            </span>
+            <span className="text-sm font-medium text-gray-700 whitespace-nowrap overflow-hidden max-w-0 opacity-0 translate-x-1 group-hover/sidebar:max-w-[140px] group-hover/sidebar:opacity-100 group-hover/sidebar:translate-x-0 transition-all duration-200">
+              Calendar
+            </span>
           </button>
         </nav>
 
-        <div className="flex flex-col items-center gap-4">
+        <div className="mt-auto flex flex-col gap-3">
           <button
             onClick={() => setCurrentPage('profile')}
-            className="size-12 rounded-full bg-white text-gray-600 hover:bg-gray-100 flex items-center justify-center"
+            className="w-full rounded-xl px-1.5 py-1 flex items-center gap-3 hover:bg-gray-50 transition-colors"
             title="Profile"
           >
-            <UserCircle className="size-5" />
+            <span className={`size-10 rounded-full flex items-center justify-center shrink-0 transition-colors ${
+              currentPage === 'profile'
+                ? 'bg-black text-white shadow-md'
+                : 'bg-white text-gray-600'
+            }`}>
+              <UserCircle className="size-5" />
+            </span>
+            <span className="text-sm font-medium text-gray-700 whitespace-nowrap overflow-hidden max-w-0 opacity-0 translate-x-1 group-hover/sidebar:max-w-[140px] group-hover/sidebar:opacity-100 group-hover/sidebar:translate-x-0 transition-all duration-200">
+              Profile
+            </span>
           </button>
+
           <button
             onClick={handleLogout}
-            className="size-10 rounded-full flex items-center justify-center bg-white text-gray-400 hover:bg-gray-100"
-            title="Log out"
+            className="w-full rounded-xl px-1.5 py-1 flex items-center gap-3 hover:bg-gray-50 transition-colors"
+            title="Logout"
           >
-            <LogOut className="size-4" />
+            <span className="size-10 rounded-full flex items-center justify-center shrink-0 transition-colors bg-white text-gray-400">
+              <LogOut className="size-4" />
+            </span>
+            <span className="text-sm font-medium text-gray-500 whitespace-nowrap overflow-hidden max-w-0 opacity-0 translate-x-1 group-hover/sidebar:max-w-[140px] group-hover/sidebar:opacity-100 group-hover/sidebar:translate-x-0 transition-all duration-200">
+              Logout
+            </span>
           </button>
         </div>
       </aside>
@@ -1084,10 +1064,20 @@ export default function App() {
         )}
 
         <main className="max-w-6xl mx-auto">
-          <div className="mb-6">
+          <div className="mb-6 flex items-center justify-between">
             <h1 className="text-3xl font-semibold text-gray-900">
               Hi {user?.username || user?.email || 'there'},
             </h1>
+            {currentPage === 'friend-detail' && selectedFriend ? (
+              <Button
+                variant="ghost"
+                onClick={() => navigateTo('dashboard')}
+                className="rounded-xl text-gray-600 hover:text-gray-900"
+              >
+                <ArrowLeft className="size-4 mr-2" />
+                Back to dashboard
+              </Button>
+            ) : null}
           </div>
           {currentPage === 'dashboard' && (
             <DashboardPage
@@ -1135,16 +1125,6 @@ export default function App() {
               onSessionsChange={loadAiStudySessions}
             />
           )}
-          {currentPage === 'friends' && (
-            <FriendsPage
-              accessToken={accessToken}
-              onRequestsUpdated={fetchIncomingFriendRequestCount}
-              onViewFriend={(friend) => {
-                setSelectedFriend(friend);
-                setCurrentPage('friend-detail');
-              }}
-            />
-          )}
           {currentPage === 'calendar' && (
             <CalendarPage accessToken={accessToken} />
           )}
@@ -1161,7 +1141,6 @@ export default function App() {
             <FriendDetailPage
               accessToken={accessToken}
               friend={selectedFriend}
-              onBack={() => setCurrentPage('friends')}
             />
           )}
         </main>

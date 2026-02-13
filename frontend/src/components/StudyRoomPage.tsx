@@ -99,6 +99,8 @@ export function StudyRoomPage({
   onLeaveRoom,
   onJoinMeeting
 }: StudyRoomPageProps) {
+  const glassPanelClass =
+    'bg-white/80 backdrop-blur border border-white/70 shadow-[0_16px_40px_rgba(15,23,42,0.10)]';
   const [group, setGroup] = useState<Group | null>(null);
   const [loading, setLoading] = useState(true);
   const [presence, setPresence] = useState<Participant[]>([]);
@@ -671,7 +673,7 @@ export function StudyRoomPage({
   };
 
   return (
-    <div className="space-y-4">
+    <div className="rounded-[28px] bg-white/60 shadow-[0_30px_80px_rgba(15,23,42,0.08)] p-6 h-[720px] overflow-y-auto space-y-4">
       <div className="flex items-center gap-4">
         {isOnlineRoom && (
           <Button onClick={openZoomFloating} size="sm" className="bg-blue-600 hover:bg-blue-700 gap-2">
@@ -752,7 +754,7 @@ export function StudyRoomPage({
           </div>
         ) : (
           /* After Study Time - Show Group Quiz */
-          <div className="lg:col-span-2 rounded-lg border bg-white h-[520px] min-h-[280px] flex flex-col">
+          <div className={`lg:col-span-2 rounded-2xl ${glassPanelClass} h-[520px] min-h-[280px] flex flex-col`}>
             {showQuizCompleted && !showResults ? (
             /* Quiz Completed View */
             <div className="flex-1 flex items-center justify-center p-6">
@@ -1099,7 +1101,7 @@ export function StudyRoomPage({
             </CardContent>
           </Card>
 
-          <Card className="flex-none">
+          <Card className={`flex-none rounded-2xl ${glassPanelClass}`}>
             <CardHeader className="pb-2">
               <CardTitle className="text-base flex items-center gap-2">
                 ⏱️ Personal Study Timer
@@ -1141,7 +1143,7 @@ export function StudyRoomPage({
               <CardContent className="flex-1 min-h-0 flex flex-col gap-3">
                 <div
                   ref={chatScrollRef}
-                  className="flex-1 min-h-0 overflow-y-auto space-y-2 rounded-lg border border-gray-100 bg-white/80 p-3"
+                  className="flex-1 min-h-0 overflow-y-auto space-y-2 rounded-2xl border border-gray-200/60 bg-white/70 p-3"
                   onScroll={(event) => {
                     const target = event.currentTarget;
                     const distanceFromBottom =
@@ -1208,7 +1210,7 @@ export function StudyRoomPage({
       {/* Quiz Settings Popup */}
       {showQuizSettings && (
         <div className="fixed inset-0 bg-black/50 backdrop-blur-sm flex items-center justify-center z-50">
-          <Card className="w-full max-w-md mx-4">
+          <Card className={`w-full max-w-md mx-4 rounded-2xl ${glassPanelClass}`}>
             <CardHeader>
               <CardTitle className="text-2xl">Generate Quiz</CardTitle>
               <p className="text-sm text-muted-foreground">

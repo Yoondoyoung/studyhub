@@ -72,6 +72,22 @@ const kvGet = async (key) => {
   return data?.value;
 };
 
+const kvGetMany = async (keys) => {
+  const uniqueKeys = Array.from(new Set((keys ?? []).filter(Boolean)));
+  if (!uniqueKeys.length) return {};
+  const { data, error } = await serviceSupabase
+    .from(KV_TABLE)
+    .select("key, value")
+    .in("key", uniqueKeys);
+  if (error) throw new Error(error.message);
+  const map = {};
+  for (const row of data ?? []) {
+    if (!row?.key) continue;
+    map[row.key] = row.value;
+  }
+  return map;
+};
+
 const kvDel = async (key) => {
   const { error } = await serviceSupabase.from(KV_TABLE).delete().eq("key", key);
   if (error) throw new Error(error.message);
@@ -871,21 +887,38 @@ app.get("/study-time-range", async (req, res) => {
 app.get("/study-groups", async (_req, res) => {
   try {
     const raw = await kvGetByPrefix("study-group:");
-    const groups = [];
+    const userKeys = [];
+    const userKeySet = new Set();
     for (const group of raw) {
-      if (applyNoShowCleanup(group)) await kvSet(`study-group:${group.id}`, group);
-      const hostProfile = group.hostId ? await kvGet(`user:${group.hostId}`) : null;
-      const hostUsername = hostProfile?.username ?? hostProfile?.email ?? (group.hostId?.slice(0, 8) ?? "—");
+      if (group?.hostId) userKeySet.add(`user:${group.hostId}`);
+      for (const id of group?.applicants || []) userKeySet.add(`user:${id}`);
+    }
+    userKeys.push(...userKeySet);
+    const usersByKey = await kvGetMany(userKeys);
+
+    const groups = [];
+    const cleanupWrites = [];
+    for (const group of raw) {
+      if (applyNoShowCleanup(group)) cleanupWrites.push(kvSet(`study-group:${group.id}`, group));
+      const hostKey = group?.hostId ? `user:${group.hostId}` : null;
+      const hostProfile = hostKey ? usersByKey[hostKey] : null;
+      const hostUsername =
+        hostProfile?.username ??
+        hostProfile?.email ??
+        (group.hostId?.slice(0, 8) ?? "—");
+
       const applicantsWithNames = [];
       for (const id of group.applicants || []) {
-        const profile = await kvGet(`user:${id}`);
+        const profile = usersByKey[`user:${id}`] ?? null;
         applicantsWithNames.push({
           id,
           username: profile?.username ?? profile?.email ?? id.slice(0, 8),
         });
       }
+
       groups.push({ ...group, hostUsername, applicantsWithNames });
     }
+    if (cleanupWrites.length) await Promise.allSettled(cleanupWrites);
     return res.json({ groups });
   } catch (err) {
     return res.status(500).json({ error: String(err?.message ?? err) });
@@ -1403,6 +1436,61 @@ app.get("/friends/:id/activity", async (req, res) => {
       activity.push({ date: dateKey, total: data.total });
     }
     return res.json({ activity });
+  } catch {
+    return res.status(401).json({ error: "Unauthorized" });
+  }
+});
+
+app.get("/friends/:id/study-time-range", async (req, res) => {
+  try {
+    const user = await requireUser(req);
+    const friendId = String(req.params.id || "");
+    if (!friendId) return res.status(400).json({ error: "Friend id required" });
+
+    const canView = user.id === friendId || (await isMutualFriendship(user.id, friendId));
+    if (!canView) return res.status(403).json({ error: "Not authorized" });
+
+    const start = String(req.query.start || "");
+    const end = String(req.query.end || "");
+    if (!start || !end) return res.status(400).json({ error: "Start and end required" });
+
+    const startDate = new Date(`${start}T00:00:00Z`);
+    const endDate = new Date(`${end}T00:00:00Z`);
+    if (Number.isNaN(startDate.getTime()) || Number.isNaN(endDate.getTime())) {
+      return res.status(400).json({ error: "Invalid date" });
+    }
+    if (startDate > endDate) {
+      return res.status(400).json({ error: "Invalid range" });
+    }
+
+    const maxDays = 400;
+    const prefix = `study-time:${friendId}:`;
+    const totals = {};
+
+    const { data: rows, error } = await serviceSupabase
+      .from(KV_TABLE)
+      .select("key, value")
+      .like("key", `${prefix}%`);
+    if (error) throw new Error(error.message);
+
+    const dateTotals = {};
+    for (const row of rows ?? []) {
+      const key = String(row?.key || "");
+      if (!key.startsWith(prefix)) continue;
+      const dateKey = key.slice(prefix.length, prefix.length + 10);
+      dateTotals[dateKey] = Number(row?.value?.total || 0);
+    }
+
+    let current = new Date(startDate);
+    let count = 0;
+    while (current <= endDate && count < maxDays) {
+      const dateKey = current.toISOString().split("T")[0];
+      totals[dateKey] = Number(dateTotals[dateKey] || 0);
+      current.setUTCDate(current.getUTCDate() + 1);
+      count += 1;
+    }
+
+    return res.json({ totals });
   } catch {
     return res.status(401).json({ error: "Unauthorized" });
   }
