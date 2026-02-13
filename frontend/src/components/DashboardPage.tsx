@@ -3,7 +3,7 @@ import { Button } from './ui/button';
 import { Input } from './ui/input';
 import { Label } from './ui/label';
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger } from './ui/dialog';
-import { Plus, CheckCircle2, Pencil, Trash2 } from 'lucide-react';
+import { Plus, CheckCircle2, Pencil, Trash2, ChevronDown, Search, UserPlus } from 'lucide-react';
 import { toast } from 'sonner';
 import { Avatar, AvatarFallback, AvatarImage } from './ui/avatar';
 import { Switch } from './ui/switch';
@@ -24,6 +24,7 @@ interface Todo {
 interface DashboardPageProps {
   accessToken: string;
   onOpenChat: (friend: Friend) => void;
+  onViewFriend: (friend: Friend) => void;
 }
 
 interface Friend {
@@ -58,7 +59,7 @@ interface DashboardCache {
   heatmapData: Record<string, number>;
 }
 
-export function DashboardPage({ accessToken, onOpenChat }: DashboardPageProps) {
+export function DashboardPage({ accessToken, onOpenChat, onViewFriend }: DashboardPageProps) {
   const TIMER_STORAGE_KEY = 'studyhub_active_timer';
   const [todos, setTodos] = useState<Todo[]>([]);
   const [dailyTotal, setDailyTotal] = useState(0);
@@ -82,6 +83,13 @@ export function DashboardPage({ accessToken, onOpenChat }: DashboardPageProps) {
   const [friends, setFriends] = useState<Friend[]>([]);
   const [nearbyRooms, setNearbyRooms] = useState<StudyRoom[]>([]);
   const [studyStreak, setStudyStreak] = useState<{ day: string; completed: boolean }[]>([]);
+  const [isFriendsExpanded, setIsFriendsExpanded] = useState(false);
+  const [showFullFriendList, setShowFullFriendList] = useState(false);
+  const [friendSearchQuery, setFriendSearchQuery] = useState('');
+  const [isFriendRequestDialogOpen, setIsFriendRequestDialogOpen] = useState(false);
+  const [friendRequestUsername, setFriendRequestUsername] = useState('');
+  const [isSendingFriendRequest, setIsSendingFriendRequest] = useState(false);
+  const collapseFriendsTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const heatmapWeekColumns = 53;
   const heatmapCellSize = 9;
   const heatmapCellGap = 3.5;
@@ -190,6 +198,68 @@ export function DashboardPage({ accessToken, onOpenChat }: DashboardPageProps) {
     studyStreak,
     heatmapData,
   ]);
+
+  useEffect(() => {
+    return () => {
+      if (collapseFriendsTimerRef.current) {
+        clearTimeout(collapseFriendsTimerRef.current);
+      }
+    };
+  }, []);
+
+  const toggleFriendsCard = () => {
+    if (collapseFriendsTimerRef.current) {
+      clearTimeout(collapseFriendsTimerRef.current);
+      collapseFriendsTimerRef.current = null;
+    }
+
+    if (!isFriendsExpanded) {
+      setShowFullFriendList(true);
+      setIsFriendsExpanded(true);
+      return;
+    }
+
+    setIsFriendsExpanded(false);
+    setFriendSearchQuery('');
+    // Delay list truncation until collapse animation finishes.
+    collapseFriendsTimerRef.current = setTimeout(() => {
+      setShowFullFriendList(false);
+      collapseFriendsTimerRef.current = null;
+    }, 500);
+  };
+
+  const handleSendFriendRequest = async () => {
+    const normalizedUsername = friendRequestUsername.trim();
+    if (!normalizedUsername) {
+      toast.error('Please enter a username');
+      return;
+    }
+    try {
+      setIsSendingFriendRequest(true);
+      const response = await fetch(`${apiBase}/friends/add`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${accessToken}`
+        },
+        body: JSON.stringify({ friendUsername: normalizedUsername })
+      });
+      const data = await response.json();
+      if (!response.ok || !data.success) {
+        toast.error(data.error || 'Failed to send friend request');
+        return;
+      }
+      setFriendRequestUsername('');
+      setIsFriendRequestDialogOpen(false);
+      toast.success('Friend request sent');
+      fetchFriendsList();
+    } catch (error) {
+      console.error('Failed to send friend request:', error);
+      toast.error('Failed to send friend request');
+    } finally {
+      setIsSendingFriendRequest(false);
+    }
+  };
 
   useEffect(() => {
     const loadStoredTimer = () => {
@@ -772,6 +842,17 @@ export function DashboardPage({ accessToken, onOpenChat }: DashboardPageProps) {
     return { label: `${diffDays}d ago`, isOnline: false };
   };
 
+  const displayedFriends = useMemo(() => {
+    const baseFriends = showFullFriendList ? friends : friends.slice(0, 4);
+    const keyword = friendSearchQuery.trim().toLowerCase();
+    if (!keyword) return baseFriends;
+    return baseFriends.filter((friend) => {
+      const username = String(friend.username || '').toLowerCase();
+      const email = String(friend.email || '').toLowerCase();
+      return username.includes(keyword) || email.includes(keyword);
+    });
+  }, [friends, showFullFriendList, friendSearchQuery]);
+
   const openEditDialog = (todo: Todo) => {
     setEditingTodoId(todo.id);
     setEditTodo({
@@ -1311,11 +1392,54 @@ export function DashboardPage({ accessToken, onOpenChat }: DashboardPageProps) {
                 </div>
               </DialogContent>
             </Dialog>
+
+            <Dialog
+              open={isFriendRequestDialogOpen}
+              onOpenChange={(open) => {
+                setIsFriendRequestDialogOpen(open);
+                if (!open) setFriendRequestUsername('');
+              }}
+            >
+              <DialogContent onClick={(event) => event.stopPropagation()}>
+                <DialogHeader>
+                  <DialogTitle>Send Friend Request</DialogTitle>
+                </DialogHeader>
+                <div className="space-y-4">
+                  <div className="space-y-2">
+                    <Label htmlFor="friend-username">Friend Username</Label>
+                    <Input
+                      id="friend-username"
+                      placeholder="johndoe"
+                      value={friendRequestUsername}
+                      onChange={(event) => setFriendRequestUsername(event.target.value)}
+                    />
+                  </div>
+                  <Button
+                    className="w-full"
+                    disabled={isSendingFriendRequest}
+                    onClick={handleSendFriendRequest}
+                  >
+                    {isSendingFriendRequest ? 'Sending...' : 'Send Request'}
+                  </Button>
+                </div>
+              </DialogContent>
+            </Dialog>
           </div>
 
         <div className="xl:col-span-4 h-full">
-          <div className="rounded-[36px] bg-white/60 shadow-[0_30px_80px_rgba(15,23,42,0.08)] p-6 space-y-6 h-full">
-            <div className="bg-white/90 rounded-3xl shadow-[0_20px_60px_rgba(15,23,42,0.08)] p-5">
+          <div
+            className={`rounded-[36px] bg-white/60 shadow-[0_30px_80px_rgba(15,23,42,0.08)] p-3 h-full flex flex-col overflow-hidden ${
+              isFriendsExpanded ? 'gap-3' : 'gap-3'
+            }`}
+          >
+            <div
+              className={`overflow-hidden transition-all duration-1000 ease-in-out ${
+                isFriendsExpanded
+                  ? 'max-h-0 opacity-0 -translate-y-8 pointer-events-none'
+                  : 'max-h-[280px] opacity-100 translate-y-0'
+              }`}
+            >
+              <div className="bg-white/90 rounded-3xl shadow-[0_20px_60px_rgba(15,23,42,0.08)] p-5">
               <h3 className="text-base font-semibold text-gray-900 mb-4">Nearby Study Rooms</h3>
               {nearbyRooms.length === 0 ? (
                 <p className="text-xs text-gray-400">No study rooms nearby yet.</p>
@@ -1334,18 +1458,59 @@ export function DashboardPage({ accessToken, onOpenChat }: DashboardPageProps) {
                   ))}
                 </div>
               )}
+              </div>
             </div>
 
-            <div className="bg-white/90 rounded-3xl shadow-[0_20px_60px_rgba(15,23,42,0.08)] p-5">
-              <h3 className="text-base font-semibold text-gray-900 mb-4">Friends</h3>
+            <div
+              className={`bg-white/90 rounded-3xl shadow-[0_20px_60px_rgba(15,23,42,0.08)] p-5 cursor-pointer self-center overflow-hidden transition-all duration-500 ease-in-out ${
+                isFriendsExpanded ? 'h-[calc(100%-0.75rem)] w-[97%]' : 'h-[320px] w-full'
+              }`}
+              onClick={toggleFriendsCard}
+            >
+              <div className="mb-4 flex items-center justify-between">
+                <h3 className="text-base font-semibold text-gray-900">Friends</h3>
+                <div className="flex items-center gap-2 text-xs text-gray-500 font-medium">
+                  <span>{isFriendsExpanded ? 'Collapse' : 'Expand'}</span>
+                  <ChevronDown
+                    className={`size-4 transition-transform duration-300 ${
+                      isFriendsExpanded ? 'rotate-180' : ''
+                    }`}
+                  />
+                </div>
+              </div>
+              {isFriendsExpanded ? (
+                <div
+                  className="mb-4 flex items-center gap-2 rounded-full border border-gray-300 bg-white px-3 py-2"
+                  onClick={(event) => event.stopPropagation()}
+                >
+                  <Search className="size-4 text-gray-500" />
+                  <Input
+                    value={friendSearchQuery}
+                    onChange={(event) => setFriendSearchQuery(event.target.value)}
+                    placeholder="Search friend..."
+                    className="h-6 border-0 bg-transparent p-0 text-xs shadow-none focus-visible:ring-0"
+                  />
+                </div>
+              ) : null}
               {friends.length === 0 ? (
                 <p className="text-xs text-gray-400">No friends yet.</p>
               ) : (
-                <div className="space-y-4">
-                {friends.slice(0, 4).map((friend) => {
+                <div
+                  className={`space-y-4 transition-[max-height] duration-300 ease-out ${
+                    isFriendsExpanded ? 'max-h-[900px]' : 'max-h-[260px]'
+                  }`}
+                >
+                {displayedFriends.map((friend) => {
                   const status = getActivityStatus(friend);
                   return (
-                    <div key={friend.id} className="flex items-center justify-between">
+                    <div
+                      key={friend.id}
+                      className="flex items-center justify-between cursor-pointer rounded-xl px-1 py-1 hover:bg-gray-50"
+                      onClick={(event) => {
+                        event.stopPropagation();
+                        onViewFriend(friend);
+                      }}
+                    >
                       <div className="flex items-center gap-3">
                         <Avatar className="size-9">
                           {friend.profileImageUrl ? (
@@ -1366,7 +1531,8 @@ export function DashboardPage({ accessToken, onOpenChat }: DashboardPageProps) {
                       </div>
                       <button
                         className="px-3 py-1 rounded-full text-[10px] font-semibold bg-rose-100 text-rose-600"
-                        onClick={() => {
+                        onClick={(event) => {
+                          event.stopPropagation();
                           onOpenChat(friend);
                         }}
                       >
@@ -1375,25 +1541,51 @@ export function DashboardPage({ accessToken, onOpenChat }: DashboardPageProps) {
                     </div>
                   );
                 })}
+                {displayedFriends.length === 0 ? (
+                  <p className="text-xs text-gray-400">No friends found.</p>
+                ) : null}
               </div>
               )}
+              {isFriendsExpanded ? (
+                <div className="mt-4 border-t border-gray-100 pt-4" onClick={(event) => event.stopPropagation()}>
+                  <Button
+                    variant="outline"
+                    className="w-full rounded-xl border-gray-300"
+                    onClick={(event) => {
+                      event.stopPropagation();
+                      setIsFriendRequestDialogOpen(true);
+                    }}
+                  >
+                    <UserPlus className="size-4 mr-2" />
+                    Add Friend
+                  </Button>
+                </div>
+              ) : null}
             </div>
 
-            <div className="bg-white/90 rounded-3xl shadow-[0_20px_60px_rgba(15,23,42,0.08)] p-4">
-              <h3 className="text-base font-semibold text-gray-900 mb-4">Study Streak</h3>
-              <div className="flex items-center justify-between">
-                {studyStreak.map((day, index) => (
-                  <div key={index} className="flex flex-col items-center gap-2">
-                    <span className="text-[10px] text-gray-500 font-medium">{day.day}</span>
-                    <div
-                      className={`size-6 rounded-full flex items-center justify-center ${
-                        day.completed ? 'bg-emerald-200 text-emerald-700' : 'bg-gray-100'
-                      }`}
-                    >
-                      {day.completed && <CheckCircle2 className="size-3" />}
+            <div
+              className={`overflow-hidden transition-all duration-500 ease-in-out ${
+                isFriendsExpanded
+                  ? 'max-h-0 opacity-0 translate-y-8 pointer-events-none'
+                  : 'max-h-[220px] opacity-100 translate-y-0'
+              }`}
+            >
+              <div className="bg-white/90 rounded-3xl shadow-[0_20px_60px_rgba(15,23,42,0.08)] p-4">
+                <h3 className="text-base font-semibold text-gray-900 mb-4">Study Streak</h3>
+                <div className="flex items-center justify-between">
+                  {studyStreak.map((day, index) => (
+                    <div key={index} className="flex flex-col items-center gap-2">
+                      <span className="text-[10px] text-gray-500 font-medium">{day.day}</span>
+                      <div
+                        className={`size-6 rounded-full flex items-center justify-center ${
+                          day.completed ? 'bg-emerald-200 text-emerald-700' : 'bg-gray-100'
+                        }`}
+                      >
+                        {day.completed && <CheckCircle2 className="size-3" />}
+                      </div>
                     </div>
-                  </div>
-                ))}
+                  ))}
+                </div>
               </div>
             </div>
           </div>

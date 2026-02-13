@@ -1018,6 +1018,10 @@ export default function App() {
             <DashboardPage
               accessToken={accessToken}
               onOpenChat={handleOpenChat}
+              onViewFriend={(friend) => {
+                setSelectedFriend(friend);
+                setCurrentPage('friend-detail');
+              }}
             />
           )}
           {currentPage === 'study-groups' && (
