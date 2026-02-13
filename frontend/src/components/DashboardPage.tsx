@@ -69,6 +69,7 @@ interface DashboardCache {
   nearbyRooms: StudyRoom[];
   studyStreak: { day: string; completed: boolean }[];
   heatmapData: Record<string, number>;
+  cachedDateKey?: string;
 }
 
 export function DashboardPage({ accessToken, onOpenChat, onViewFriend }: DashboardPageProps) {
@@ -117,6 +118,7 @@ export function DashboardPage({ accessToken, onOpenChat, onViewFriend }: Dashboa
     y: number;
   } | null>(null);
   const heatmapRef = useRef<HTMLDivElement | null>(null);
+  const lastSeenDateRef = useRef('');
 
 
   const [newTodo, setNewTodo] = useState({
@@ -150,8 +152,10 @@ export function DashboardPage({ accessToken, onOpenChat, onViewFriend }: Dashboa
         const raw = sessionStorage.getItem(dashboardCacheKey);
         if (raw) {
           const cached = JSON.parse(raw) as DashboardCache;
+          const todayKey = toLocalDateKey(new Date());
+          const isSameDay = cached.cachedDateKey === todayKey;
           setTodos(cached.todos || []);
-          setDailyTotal(Number(cached.dailyTotal || 0));
+          setDailyTotal(isSameDay ? Number(cached.dailyTotal || 0) : 0);
           setWeeklyTotal(Number(cached.weeklyTotal || 0));
           setMonthlyTotal(Number(cached.monthlyTotal || 0));
           setDailyGoal(Number(cached.dailyGoal || 0));
@@ -198,6 +202,7 @@ export function DashboardPage({ accessToken, onOpenChat, onViewFriend }: Dashboa
       nearbyRooms,
       studyStreak,
       heatmapData,
+      cachedDateKey: toLocalDateKey(new Date()),
     };
     sessionStorage.setItem(dashboardCacheKey, JSON.stringify(payload));
   }, [
@@ -215,6 +220,20 @@ export function DashboardPage({ accessToken, onOpenChat, onViewFriend }: Dashboa
     studyStreak,
     heatmapData,
   ]);
+
+  useEffect(() => {
+    const interval = setInterval(() => {
+      const todayKey = toLocalDateKey(new Date());
+      if (!lastSeenDateRef.current) {
+        lastSeenDateRef.current = todayKey;
+      }
+      if (todayKey === lastSeenDateRef.current) return;
+      lastSeenDateRef.current = todayKey;
+      setDailyTotal(0);
+      fetchStudyTimeSummary();
+    }, 60000);
+    return () => clearInterval(interval);
+  }, [accessToken]);
 
   useEffect(() => {
     return () => {
@@ -311,9 +330,9 @@ export function DashboardPage({ accessToken, onOpenChat, onViewFriend }: Dashboa
           // Auto-complete task when reaching planned duration
           const activeTodo = todos.find(t => t.id === activeTimer);
           if (activeTodo && activeTodo.plannedDuration) {
-            const plannedSeconds = activeTodo.plannedDuration * 60;
+            const plannedSeconds = activeTodo.plannedDuration;
             if (elapsed >= plannedSeconds) {
-              stopTimer(activeTodo);
+              stopTimer(activeTodo, { setCompleted: true });
               toast.success('🎉 Task completed!');
             }
           }
@@ -663,7 +682,8 @@ export function DashboardPage({ accessToken, onOpenChat, onViewFriend }: Dashboa
     }
   };
 
-  const handleToggleComplete = async (todo: Todo) => {
+  const handleSetTodoCompletion = async (todo: Todo, completed: boolean) => {
+    if (todo.completed === completed) return true;
     try {
       const response = await fetch(`${apiBase}/todos/${todo.id}`, {
         method: 'PUT',
@@ -673,21 +693,21 @@ export function DashboardPage({ accessToken, onOpenChat, onViewFriend }: Dashboa
         },
         body: JSON.stringify({ 
           ...todo, 
-          completed: !todo.completed,
-          completedAt: !todo.completed ? new Date().toISOString() : undefined
+          completed,
+          completedAt: completed ? todo.completedAt || new Date().toISOString() : undefined
         })
       });
       const data = await response.json();
       
       if (data.todo) {
         setTodos(todos.map(t => t.id === todo.id ? data.todo : t));
-        if (!todo.completed) {
-          toast.success('✨ Task completed!');
-        }
+        toast.success(completed ? '✨ Task completed!' : 'Task marked as not done');
+        return true;
       }
     } catch (error) {
       console.error('Failed to update todo:', error);
     }
+    return false;
   };
 
   const handleToggleShared = async (todo: Todo, shared: boolean) => {
@@ -736,7 +756,7 @@ export function DashboardPage({ accessToken, onOpenChat, onViewFriend }: Dashboa
     }
   };
 
-  const stopTimer = async (todo: Todo) => {
+  const stopTimer = async (todo: Todo, options?: { setCompleted?: boolean }) => {
     if (activeTimer !== todo.id) return;
 
     const raw = localStorage.getItem(TIMER_STORAGE_KEY);
@@ -752,6 +772,9 @@ export function DashboardPage({ accessToken, onOpenChat, onViewFriend }: Dashboa
     setTimerSeconds(0);
 
     try {
+      const shouldMarkCompleted = options?.setCompleted ?? Boolean(todo.completed);
+      const completedAt = shouldMarkCompleted ? todo.completedAt || new Date().toISOString() : undefined;
+
       // Call backend API to stop timer and track study time
       const timerResponse = await fetch(`${apiBase}/study/timer/stop`, {
         method: 'POST',
@@ -789,7 +812,9 @@ export function DashboardPage({ accessToken, onOpenChat, onViewFriend }: Dashboa
             ...todo,
             duration: todo.plannedDuration ?? todo.duration ?? 0,
             plannedDuration: todo.plannedDuration ?? todo.duration ?? 0,
-            actualDuration: (todo.actualDuration || 0) + elapsedSeconds
+            actualDuration: (todo.actualDuration || 0) + elapsedSeconds,
+            completed: shouldMarkCompleted,
+            completedAt
           })
         })
       ]);
@@ -1073,7 +1098,7 @@ export function DashboardPage({ accessToken, onOpenChat, onViewFriend }: Dashboa
                 <h3 className="text-base font-semibold text-gray-900">Today's Tasks</h3>
                 <Dialog open={isAddDialogOpen} onOpenChange={setIsAddDialogOpen}>
                   <DialogTrigger asChild>
-                    <button className="text-sm text-gray-400 hover:text-gray-600">•••</button>
+                    <button className="text-2xl text-gray-400 hover:text-gray-600">+</button>
                   </DialogTrigger>
                   <DialogContent>
                     <DialogHeader>
@@ -1161,7 +1186,7 @@ export function DashboardPage({ accessToken, onOpenChat, onViewFriend }: Dashboa
                   const plannedSeconds = getPlannedSeconds(todo);
                   const progressPercent = getProgressPercent(todo);
                   const pillColor =
-                    progressPercent >= 100
+                    todo.completed || progressPercent >= 100
                       ? 'bg-emerald-100 text-emerald-700'
                       : progressPercent >= 50
                       ? 'bg-amber-100 text-amber-700'
@@ -1169,8 +1194,9 @@ export function DashboardPage({ accessToken, onOpenChat, onViewFriend }: Dashboa
 
                   const isActive = activeTimer === todo.id;
                   const currentSeconds = isActive ? timerSeconds : (todo.actualDuration || 0);
-                  const targetSeconds = (todo.plannedDuration || 0) * 60;
+                  const targetSeconds = getPlannedSeconds(todo);
                   const progressPercentForCircle = targetSeconds > 0 ? Math.min((currentSeconds / targetSeconds) * 100, 100) : 0;
+                  const isMaxedProgress = progressPercentForCircle >= 100;
                   const radius = 16;
                   const circumference = 2 * Math.PI * radius;
                   const strokeDashoffset = circumference - (progressPercentForCircle / 100) * circumference;
@@ -1183,6 +1209,8 @@ export function DashboardPage({ accessToken, onOpenChat, onViewFriend }: Dashboa
                       onClick={() => {
                         if (isActive) {
                           stopTimer(todo as Todo);
+                        } else if (todo.completed || isMaxedProgress) {
+                          return;
                         } else {
                           startTimer(todo.id);
                         }
@@ -1192,6 +1220,8 @@ export function DashboardPage({ accessToken, onOpenChat, onViewFriend }: Dashboa
                           event.preventDefault();
                           if (isActive) {
                             stopTimer(todo as Todo);
+                          } else if (todo.completed || isMaxedProgress) {
+                            return;
                           } else {
                             startTimer(todo.id);
                           }
@@ -1244,9 +1274,27 @@ export function DashboardPage({ accessToken, onOpenChat, onViewFriend }: Dashboa
                           {plannedSeconds ? formatTime(plannedSeconds) : '0:00'}
                         </p>
                       </div>
-                      <span className={`self-end px-2 py-1 rounded-full text-[10px] font-semibold ${pillColor}`}>
-                        {Math.round(progressPercent)}%
-                      </span>
+                      <button
+                        type="button"
+                        className={`group self-end px-2 py-1 rounded-full text-[10px] font-semibold transition ${pillColor}`}
+                        onClick={async (event) => {
+                          event.preventDefault();
+                          event.stopPropagation();
+                          const nextCompleted = !todo.completed;
+                          if (isActive) {
+                            await stopTimer(todo as Todo, { setCompleted: nextCompleted });
+                            return;
+                          }
+                          await handleSetTodoCompletion(todo as Todo, nextCompleted);
+                        }}
+                      >
+                        <span className="group-hover:hidden">
+                          {todo.completed ? 'DONE' : `${Math.round(progressPercent)}%`}
+                        </span>
+                        <span className="hidden group-hover:inline">
+                          {todo.completed ? 'UNDO' : 'DONE'}
+                        </span>
+                      </button>
                     </div>
                   );
                   })}
