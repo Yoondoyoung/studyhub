@@ -110,6 +110,12 @@ interface ChatMessage {
   pending?: boolean;
 }
 
+interface FriendRequest {
+  requesterId: string;
+  createdAt: string;
+  requester?: Friend;
+}
+
 interface StudySession {
   id: string;
   name: string;
@@ -141,6 +147,7 @@ export default function App() {
   const [chatPanelOpen, setChatPanelOpen] = useState(false);
   const [recentChatFriends, setRecentChatFriends] = useState<Friend[]>([]);
   const [chatNotifications, setChatNotifications] = useState<Record<string, boolean>>({});
+  const [incomingFriendRequestCount, setIncomingFriendRequestCount] = useState(0);
   const socketRef = useRef<WebSocket | null>(null);
   const friendsRef = useRef<Friend[]>([]);
   const chatFriendRef = useRef<Friend | null>(null);
@@ -545,6 +552,20 @@ export default function App() {
     navigateTo('solo-study');
   };
 
+  const fetchIncomingFriendRequestCount = async () => {
+    if (!accessToken) return;
+    try {
+      const response = await fetch(`${apiBase}/friends/requests`, {
+        headers: { Authorization: `Bearer ${accessToken}` }
+      });
+      const data = await response.json();
+      const requests = Array.isArray(data.requests) ? (data.requests as FriendRequest[]) : [];
+      setIncomingFriendRequestCount(requests.length);
+    } catch (error) {
+      console.error('Failed to fetch friend requests:', error);
+    }
+  };
+
   const handleDeleteSession = async (sessionId: string, e: React.MouseEvent) => {
     e.stopPropagation();
     
@@ -744,6 +765,13 @@ export default function App() {
   }, [accessToken]);
 
   useEffect(() => {
+    if (!accessToken) return;
+    fetchIncomingFriendRequestCount();
+    const interval = setInterval(fetchIncomingFriendRequestCount, 10000);
+    return () => clearInterval(interval);
+  }, [accessToken]);
+
+  useEffect(() => {
     friendsRef.current = friends;
   }, [friends]);
 
@@ -772,32 +800,73 @@ export default function App() {
     socket.onmessage = (event) => {
       try {
         const payload = JSON.parse(event.data);
-        if (payload?.type !== 'chat:message' || !payload?.message) return;
-        const message = payload.message as ChatMessage;
-        const friendId =
-          message.senderId === user.id ? message.recipientId : message.senderId;
-        upsertChatMessage(friendId, message);
-        if (message.senderId !== user.id) {
-          const activeFriendId = chatFriendRef.current?.id;
-          const isChatOpen = chatPanelOpenRef.current;
-          if (!isChatOpen || activeFriendId !== friendId) {
-            const friendInfo =
-              friendsRef.current.find((friend) => friend.id === friendId) ||
-              chatFriendRef.current ||
-              {
-                id: friendId,
-                username: 'Friend',
-                email: '',
-                category: '',
-                lastActivityAt: null,
-                profileImageUrl: ''
-              };
-            setRecentChatFriends((prev) => {
-              const next = [friendInfo as Friend, ...prev.filter((item) => item.id !== friendId)];
-              return next.slice(0, 3);
-            });
-            setChatNotifications((prev) => ({ ...prev, [friendId]: true }));
+        if (payload?.type === 'chat:message' && payload?.message) {
+          const message = payload.message as ChatMessage;
+          const friendId =
+            message.senderId === user.id ? message.recipientId : message.senderId;
+          upsertChatMessage(friendId, message);
+          if (message.senderId !== user.id) {
+            const activeFriendId = chatFriendRef.current?.id;
+            const isChatOpen = chatPanelOpenRef.current;
+            if (!isChatOpen || activeFriendId !== friendId) {
+              const friendInfo =
+                friendsRef.current.find((friend) => friend.id === friendId) ||
+                chatFriendRef.current ||
+                {
+                  id: friendId,
+                  username: 'Friend',
+                  email: '',
+                  category: '',
+                  lastActivityAt: null,
+                  profileImageUrl: ''
+                };
+              setRecentChatFriends((prev) => {
+                const next = [friendInfo as Friend, ...prev.filter((item) => item.id !== friendId)];
+                return next.slice(0, 3);
+              });
+              setChatNotifications((prev) => ({ ...prev, [friendId]: true }));
+            }
           }
+          return;
+        }
+
+        if (payload?.type === 'friend:request') {
+          const senderName = payload?.request?.requester?.username || 'Someone';
+          toast.info(`${senderName} sent you a friend request.`);
+          setIncomingFriendRequestCount((prev) => prev + 1);
+          return;
+        }
+
+        if (payload?.type === 'friend:request:accepted') {
+          const friendName = payload?.friend?.username || 'Your friend';
+          toast.success(`${friendName} accepted your request.`);
+          // Refresh friend list so chat targets are up-to-date.
+          fetch(`${apiBase}/friends`, {
+            headers: { Authorization: `Bearer ${accessToken}` }
+          })
+            .then((response) => response.json())
+            .then((data) => setFriends(data.friends || []))
+            .catch(() => {});
+          return;
+        }
+
+        if (payload?.type === 'friend:request:rejected') {
+          toast.error('Your friend request was rejected.');
+          return;
+        }
+
+        if (payload?.type === 'chat:error') {
+          const recipientId = String(payload?.recipientId || '');
+          const failedClientId = payload?.clientId ? String(payload.clientId) : '';
+          if (recipientId && failedClientId) {
+            setChatMessagesByFriend((prev) => {
+              const existing = prev[recipientId] || [];
+              const next = existing.filter((item) => item.clientId !== failedClientId);
+              return { ...prev, [recipientId]: next };
+            });
+          }
+          toast.error(payload?.message || 'Unable to send message.');
+          return;
         }
       } catch (error) {
         console.error('Failed to parse chat message:', error);
@@ -848,6 +917,9 @@ export default function App() {
       </>
     );
   }
+
+  const unreadChatCount = Object.values(chatNotifications).filter(Boolean).length;
+  const totalFriendAlerts = incomingFriendRequestCount + unreadChatCount;
 
   return (
     <div className="min-h-screen bg-gradient-to-br from-[#eaf5ff] via-[#f7f9ff] to-[#fde9f1] flex">
@@ -946,17 +1018,24 @@ export default function App() {
             )}
           </div>
           
-          <button
-            onClick={() => navigateTo('friends')}
-            className={`size-12 rounded-full flex items-center justify-center transition-colors ${
-              currentPage === 'friends'
-                ? 'bg-black text-white shadow-md'
-                : 'bg-white text-gray-600 hover:bg-gray-100'
-            }`}
-            title="Friends"
-          >
-            <Users className="size-5" />
-          </button>
+          <div className="relative">
+            <button
+              onClick={() => navigateTo('friends')}
+              className={`size-12 rounded-full flex items-center justify-center transition-colors ${
+                currentPage === 'friends'
+                  ? 'bg-black text-white shadow-md'
+                  : 'bg-white text-gray-600 hover:bg-gray-100'
+              }`}
+              title="Friends"
+            >
+              <Users className="size-5" />
+            </button>
+            {totalFriendAlerts > 0 ? (
+              <span className="absolute -top-1 -right-1 min-w-[18px] h-[18px] px-1 rounded-full bg-rose-500 text-white text-[10px] font-semibold flex items-center justify-center">
+                {totalFriendAlerts > 99 ? '99+' : totalFriendAlerts}
+              </span>
+            ) : null}
+          </div>
 
           <button
             onClick={() => navigateTo('calendar')}
@@ -1062,6 +1141,7 @@ export default function App() {
           {currentPage === 'friends' && (
             <FriendsPage
               accessToken={accessToken}
+              onRequestsUpdated={fetchIncomingFriendRequestCount}
               onViewFriend={(friend) => {
                 setSelectedFriend(friend);
                 setCurrentPage('friend-detail');

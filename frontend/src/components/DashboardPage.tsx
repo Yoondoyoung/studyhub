@@ -3,7 +3,7 @@ import { Button } from './ui/button';
 import { Input } from './ui/input';
 import { Label } from './ui/label';
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger } from './ui/dialog';
-import { Plus, CheckCircle2, Pencil, Trash2, ChevronDown, Search, UserPlus } from 'lucide-react';
+import { Plus, Check, CheckCircle2, Pencil, Trash2, ChevronDown, Search, UserPlus, X } from 'lucide-react';
 import { toast } from 'sonner';
 import { Avatar, AvatarFallback, AvatarImage } from './ui/avatar';
 import { Switch } from './ui/switch';
@@ -33,6 +33,18 @@ interface Friend {
   email?: string;
   lastActivityAt?: string | null;
   profileImageUrl?: string;
+}
+
+interface IncomingFriendRequest {
+  requesterId: string;
+  createdAt: string;
+  requester: Friend;
+}
+
+interface OutgoingFriendRequest {
+  recipientId: string;
+  createdAt: string;
+  recipient: Friend;
 }
 
 interface StudyRoom {
@@ -89,6 +101,11 @@ export function DashboardPage({ accessToken, onOpenChat, onViewFriend }: Dashboa
   const [isFriendRequestDialogOpen, setIsFriendRequestDialogOpen] = useState(false);
   const [friendRequestUsername, setFriendRequestUsername] = useState('');
   const [isSendingFriendRequest, setIsSendingFriendRequest] = useState(false);
+  const [incomingFriendRequests, setIncomingFriendRequests] = useState<IncomingFriendRequest[]>([]);
+  const [outgoingFriendRequests, setOutgoingFriendRequests] = useState<OutgoingFriendRequest[]>([]);
+  const [incomingFriendRequestCount, setIncomingFriendRequestCount] = useState(0);
+  const [isViewingRequestProfiles, setIsViewingRequestProfiles] = useState(false);
+  const [requestActionUserId, setRequestActionUserId] = useState<string | null>(null);
   const collapseFriendsTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const heatmapWeekColumns = 53;
   const heatmapCellSize = 9;
@@ -215,11 +232,13 @@ export function DashboardPage({ accessToken, onOpenChat, onViewFriend }: Dashboa
 
     if (!isFriendsExpanded) {
       setShowFullFriendList(true);
+      setIsViewingRequestProfiles(false);
       setIsFriendsExpanded(true);
       return;
     }
 
     setIsFriendsExpanded(false);
+    setIsViewingRequestProfiles(false);
     setFriendSearchQuery('');
     // Delay list truncation until collapse animation finishes.
     collapseFriendsTimerRef.current = setTimeout(() => {
@@ -251,8 +270,14 @@ export function DashboardPage({ accessToken, onOpenChat, onViewFriend }: Dashboa
       }
       setFriendRequestUsername('');
       setIsFriendRequestDialogOpen(false);
-      toast.success('Friend request sent');
-      fetchFriendsList();
+      if (data.autoAccepted) {
+        toast.success('Request matched and accepted.');
+        fetchFriendsList();
+        fetchOutgoingFriendRequests();
+      } else {
+        toast.success('Friend request sent (pending).');
+        fetchOutgoingFriendRequests();
+      }
     } catch (error) {
       console.error('Failed to send friend request:', error);
       toast.error('Failed to send friend request');
@@ -423,6 +448,60 @@ export function DashboardPage({ accessToken, onOpenChat, onViewFriend }: Dashboa
     }
   };
 
+  const fetchIncomingFriendRequests = async () => {
+    try {
+      const response = await fetch(`${apiBase}/friends/requests`, {
+        headers: { Authorization: `Bearer ${accessToken}` }
+      });
+      const data = await response.json();
+      const requests = Array.isArray(data.requests) ? (data.requests as IncomingFriendRequest[]) : [];
+      setIncomingFriendRequests(requests);
+      setIncomingFriendRequestCount(requests.length);
+    } catch (error) {
+      console.error('Failed to fetch incoming friend requests:', error);
+    }
+  };
+
+  const fetchOutgoingFriendRequests = async () => {
+    try {
+      const response = await fetch(`${apiBase}/friends/requests/sent`, {
+        headers: { Authorization: `Bearer ${accessToken}` }
+      });
+      const data = await response.json();
+      const requests = Array.isArray(data.requests) ? (data.requests as OutgoingFriendRequest[]) : [];
+      setOutgoingFriendRequests(requests);
+    } catch (error) {
+      console.error('Failed to fetch outgoing friend requests:', error);
+    }
+  };
+
+  const handleFriendRequestAction = async (requesterId: string, action: 'accept' | 'reject') => {
+    try {
+      setRequestActionUserId(requesterId);
+      const response = await fetch(`${apiBase}/friends/requests/${requesterId}/${action}`, {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${accessToken}` }
+      });
+      const data = await response.json();
+      if (!response.ok || !data.success) {
+        toast.error(data.error || `Failed to ${action} request`);
+        return;
+      }
+      if (action === 'accept') {
+        toast.success('Friend request accepted');
+        fetchFriendsList();
+      } else {
+        toast.success('Friend request rejected');
+      }
+      fetchIncomingFriendRequests();
+    } catch (error) {
+      console.error(`Failed to ${action} friend request:`, error);
+      toast.error(`Failed to ${action} request`);
+    } finally {
+      setRequestActionUserId(null);
+    }
+  };
+
   const fetchStudyGroups = async () => {
     try {
       const response = await fetch(`${apiBase}/study-groups`);
@@ -432,6 +511,17 @@ export function DashboardPage({ accessToken, onOpenChat, onViewFriend }: Dashboa
       console.error('Failed to fetch study groups:', error);
     }
   };
+
+  useEffect(() => {
+    fetchIncomingFriendRequests();
+    fetchOutgoingFriendRequests();
+    const interval = setInterval(fetchIncomingFriendRequests, 10000);
+    const outgoingInterval = setInterval(fetchOutgoingFriendRequests, 10000);
+    return () => {
+      clearInterval(interval);
+      clearInterval(outgoingInterval);
+    };
+  }, [accessToken]);
 
   const fetchGoals = async () => {
     try {
@@ -844,14 +934,20 @@ export function DashboardPage({ accessToken, onOpenChat, onViewFriend }: Dashboa
 
   const displayedFriends = useMemo(() => {
     const baseFriends = showFullFriendList ? friends : friends.slice(0, 4);
+    const pendingProfiles = outgoingFriendRequests.map((request) => request.recipient);
+    const merged = [...baseFriends, ...pendingProfiles];
     const keyword = friendSearchQuery.trim().toLowerCase();
-    if (!keyword) return baseFriends;
-    return baseFriends.filter((friend) => {
+    if (!keyword) return merged;
+    return merged.filter((friend) => {
       const username = String(friend.username || '').toLowerCase();
       const email = String(friend.email || '').toLowerCase();
       return username.includes(keyword) || email.includes(keyword);
     });
-  }, [friends, showFullFriendList, friendSearchQuery]);
+  }, [friends, outgoingFriendRequests, showFullFriendList, friendSearchQuery]);
+
+  const outgoingPendingIdSet = useMemo(() => {
+    return new Set(outgoingFriendRequests.map((request) => request.recipientId));
+  }, [outgoingFriendRequests]);
 
   const openEditDialog = (todo: Todo) => {
     setEditingTodoId(todo.id);
@@ -1468,9 +1564,26 @@ export function DashboardPage({ accessToken, onOpenChat, onViewFriend }: Dashboa
               onClick={toggleFriendsCard}
             >
               <div className="mb-4 flex items-center justify-between">
-                <h3 className="text-base font-semibold text-gray-900">Friends</h3>
+                <div className="flex items-center gap-2">
+                  <h3 className="text-base font-semibold text-gray-900">Friends</h3>
+                  {incomingFriendRequestCount > 0 ? (
+                    <button
+                      type="button"
+                      className="inline-flex min-w-[20px] h-5 px-1.5 items-center justify-center rounded-full bg-rose-500 text-white text-[11px] font-semibold hover:bg-rose-600"
+                      onClick={(event) => {
+                        event.stopPropagation();
+                        setIsViewingRequestProfiles(true);
+                        setShowFullFriendList(true);
+                        setIsFriendsExpanded(true);
+                      }}
+                      title="View friend requests"
+                    >
+                      {incomingFriendRequestCount > 99 ? '99+' : incomingFriendRequestCount}
+                    </button>
+                  ) : null}
+                </div>
                 <div className="flex items-center gap-2 text-xs text-gray-500 font-medium">
-                  <span>{isFriendsExpanded ? 'Collapse' : 'Expand'}</span>
+                  <span>{isViewingRequestProfiles ? 'Requests' : isFriendsExpanded ? 'Collapse' : 'Expand'}</span>
                   <ChevronDown
                     className={`size-4 transition-transform duration-300 ${
                       isFriendsExpanded ? 'rotate-180' : ''
@@ -1478,7 +1591,7 @@ export function DashboardPage({ accessToken, onOpenChat, onViewFriend }: Dashboa
                   />
                 </div>
               </div>
-              {isFriendsExpanded ? (
+              {isFriendsExpanded && !isViewingRequestProfiles ? (
                 <div
                   className="mb-4 flex items-center gap-2 rounded-full border border-gray-300 bg-white px-3 py-2"
                   onClick={(event) => event.stopPropagation()}
@@ -1492,7 +1605,78 @@ export function DashboardPage({ accessToken, onOpenChat, onViewFriend }: Dashboa
                   />
                 </div>
               ) : null}
-              {friends.length === 0 ? (
+              {isViewingRequestProfiles ? (
+                <div className="space-y-3" onClick={(event) => event.stopPropagation()}>
+                  <div className="flex items-center justify-between">
+                    <p className="text-sm font-medium text-gray-900">Friend Requests</p>
+                    <button
+                      type="button"
+                      className="text-xs text-gray-500 hover:text-gray-700"
+                      onClick={(event) => {
+                        event.stopPropagation();
+                        setIsViewingRequestProfiles(false);
+                      }}
+                    >
+                      Back to Friends
+                    </button>
+                  </div>
+                  {incomingFriendRequests.length === 0 ? (
+                    <p className="text-xs text-gray-400">No pending requests.</p>
+                  ) : (
+                    <div className="space-y-3">
+                      {incomingFriendRequests.map((request) => {
+                        const profile = request.requester;
+                        const busy = requestActionUserId === request.requesterId;
+                        return (
+                          <div key={request.requesterId} className="rounded-xl border border-gray-100 bg-white/80 p-3">
+                            <div className="flex items-center justify-between gap-3">
+                              <div className="flex items-center gap-3 min-w-0">
+                                <Avatar className="size-10">
+                                  {profile.profileImageUrl ? (
+                                    <AvatarImage src={profile.profileImageUrl} alt={profile.username || 'User'} />
+                                  ) : null}
+                                  <AvatarFallback className="bg-gray-100 text-gray-600 text-xs font-semibold">
+                                    {getInitials(profile.username || profile.email || 'U')}
+                                  </AvatarFallback>
+                                </Avatar>
+                                <div className="min-w-0">
+                                  <p className="text-sm font-semibold text-gray-900 truncate">{profile.username || 'Unknown'}</p>
+                                  <p className="text-xs text-gray-400 truncate">{profile.email || ''}</p>
+                                </div>
+                              </div>
+                              <div className="flex items-center gap-2 shrink-0">
+                                <Button
+                                  size="icon"
+                                  className="size-8 rounded-full"
+                                  disabled={busy}
+                                  onClick={(event) => {
+                                    event.stopPropagation();
+                                    handleFriendRequestAction(request.requesterId, 'accept');
+                                  }}
+                                >
+                                  <Check className="size-4" />
+                                </Button>
+                                <Button
+                                  size="icon"
+                                  variant="outline"
+                                  className="size-8 rounded-full"
+                                  disabled={busy}
+                                  onClick={(event) => {
+                                    event.stopPropagation();
+                                    handleFriendRequestAction(request.requesterId, 'reject');
+                                  }}
+                                >
+                                  <X className="size-4" />
+                                </Button>
+                              </div>
+                            </div>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  )}
+                </div>
+              ) : friends.length === 0 ? (
                 <p className="text-xs text-gray-400">No friends yet.</p>
               ) : (
                 <div
@@ -1501,6 +1685,7 @@ export function DashboardPage({ accessToken, onOpenChat, onViewFriend }: Dashboa
                   }`}
                 >
                 {displayedFriends.map((friend) => {
+                  const isPending = outgoingPendingIdSet.has(friend.id);
                   const status = getActivityStatus(friend);
                   return (
                     <div
@@ -1508,6 +1693,7 @@ export function DashboardPage({ accessToken, onOpenChat, onViewFriend }: Dashboa
                       className="flex items-center justify-between cursor-pointer rounded-xl px-1 py-1 hover:bg-gray-50"
                       onClick={(event) => {
                         event.stopPropagation();
+                        if (isPending) return;
                         onViewFriend(friend);
                       }}
                     >
@@ -1524,20 +1710,30 @@ export function DashboardPage({ accessToken, onOpenChat, onViewFriend }: Dashboa
                           <p className="text-sm font-medium text-gray-900">
                             {friend.username || 'Unknown'}
                           </p>
-                          <p className={`text-xs ${status.isOnline ? 'text-emerald-500' : 'text-gray-400'}`}>
-                            {status.isOnline ? 'Online' : 'Offline'}
-                          </p>
+                          {isPending ? (
+                            <p className="text-xs text-amber-500">Pending</p>
+                          ) : (
+                            <p className={`text-xs ${status.isOnline ? 'text-emerald-500' : 'text-gray-400'}`}>
+                              {status.isOnline ? 'Online' : 'Offline'}
+                            </p>
+                          )}
                         </div>
                       </div>
-                      <button
-                        className="px-3 py-1 rounded-full text-[10px] font-semibold bg-rose-100 text-rose-600"
-                        onClick={(event) => {
-                          event.stopPropagation();
-                          onOpenChat(friend);
-                        }}
-                      >
-                        CHAT
-                      </button>
+                      {isPending ? (
+                        <span className="px-3 py-1 rounded-full text-[10px] font-semibold bg-amber-100 text-amber-700">
+                          PENDING
+                        </span>
+                      ) : (
+                        <button
+                          className="px-3 py-1 rounded-full text-[10px] font-semibold bg-rose-100 text-rose-600"
+                          onClick={(event) => {
+                            event.stopPropagation();
+                            onOpenChat(friend);
+                          }}
+                        >
+                          CHAT
+                        </button>
+                      )}
                     </div>
                   );
                 })}
@@ -1546,7 +1742,7 @@ export function DashboardPage({ accessToken, onOpenChat, onViewFriend }: Dashboa
                 ) : null}
               </div>
               )}
-              {isFriendsExpanded ? (
+              {isFriendsExpanded && !isViewingRequestProfiles ? (
                 <div className="mt-4 border-t border-gray-100 pt-4" onClick={(event) => event.stopPropagation()}>
                   <Button
                     variant="outline"
