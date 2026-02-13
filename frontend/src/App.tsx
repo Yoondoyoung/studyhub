@@ -898,7 +898,7 @@ export default function App() {
   return (
     <div className="min-h-screen bg-gradient-to-br from-[#eaf5ff] via-[#f7f9ff] to-[#fde9f1] flex">
       {/* Sidebar */}
-      <aside className="group/sidebar fixed left-6 top-6 bottom-6 w-20 hover:w-64 bg-white/90 backdrop-blur rounded-[32px] shadow-xl flex flex-col py-8 px-3 transition-all duration-300 overflow-visible">
+      <aside className="group/sidebar fixed left-6 top-6 bottom-6 w-20 hover:w-44 min-[1650px]:hover:w-64 bg-white/90 backdrop-blur rounded-[32px] shadow-xl flex flex-col py-8 px-3 transition-all duration-300 overflow-visible">
         <div className="h-12 flex items-center justify-center group-hover/sidebar:justify-start transition-all gap-2">
           <div className="size-12 rounded-2xl bg-[#e9f6ff] flex items-center justify-center shrink-0">
             <GraduationCap className="size-6 text-gray-800" />
@@ -1059,14 +1059,14 @@ export default function App() {
       </aside>
 
       {/* Main Content */}
-      <div className="flex-1 pl-[19rem] pr-4 sm:pr-6 lg:pr-8 py-8">
+      <div className="flex-1 pl-[13rem] min-[1650px]:pl-[16rem] pr-[clamp(1rem,2vw,2rem)] py-8">
         {prototypeMode && (
           <div className="bg-amber-500 text-white py-2 px-6 text-center text-xs font-medium rounded-full mb-4">
             🎨 PROTOTYPE MODE
           </div>
         )}
 
-        <main className="max-w-6xl mx-auto">
+        <main className="w-full max-w-[min(76rem,78vw)] mx-auto">
           <div className="mb-6 flex items-center justify-between">
             <h1 className="text-3xl font-semibold text-gray-900">
               Hi {user?.username || user?.email || 'there'},
