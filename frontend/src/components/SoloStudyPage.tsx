@@ -677,7 +677,7 @@ export function SoloStudyPage({ initialSessionId, onSessionsChange }: SoloStudyP
             </div>
           )}
         </CardHeader>
-        <CardContent className="flex-1 min-h-0 flex flex-col pt-0">
+        <CardContent className="flex-1 min-h-0 flex flex-col pt-0 overflow-y-auto">
           {/* Quiz UI - only show in Quiz Phase */}
           {mode === 'teach' && teachPhase === 'quiz' ? (
             <div className="flex-1 flex flex-col">
