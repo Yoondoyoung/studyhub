@@ -1122,7 +1122,7 @@ export function DashboardPage({ accessToken, onOpenChat, onViewFriend }: Dashboa
     <div className="space-y-6">
       <div className="grid grid-cols-1 xl:grid-cols-12 gap-6 items-stretch">
         <div className="xl:col-span-8 space-y-6">
-          <div className="rounded-[36px] bg-white/60 shadow-[0_30px_80px_rgba(15,23,42,0.08)] p-6 space-y-6">
+          <div className="rounded-[36px] bg-white/60 shadow-[0_30px_80px_rgba(15,23,42,0.08)] p-4 space-y-6">
             <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
               {[
                 { label: 'Daily Goal', total: dailyTotal, goal: dailyGoal },
@@ -1657,9 +1657,9 @@ export function DashboardPage({ accessToken, onOpenChat, onViewFriend }: Dashboa
             </Dialog>
           </div>
 
-        <div className="xl:col-span-4 flex min-h-0">
+        <div className="xl:col-span-4">
           <div
-            className={`rounded-[36px] bg-white/60 shadow-[0_30px_80px_rgba(15,23,42,0.08)] p-3 flex-1 flex flex-col overflow-hidden ${
+            className={`rounded-[36px] bg-white/60 shadow-[0_30px_80px_rgba(15,23,42,0.08)] p-4 h-full flex flex-col overflow-hidden ${
               isFriendsExpanded ? 'gap-3' : 'gap-3'
             }`}
           >
