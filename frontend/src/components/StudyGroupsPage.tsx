@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import { Button } from './ui/button';
 import { Input } from './ui/input';
 import { Label } from './ui/label';
@@ -6,7 +6,7 @@ import { Card, CardContent } from './ui/card';
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger } from './ui/dialog';
 import { Badge } from './ui/badge';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from './ui/select';
-import { MapPin, Plus, CheckCircle2, XCircle, Clock, Trash2, Video, Pencil, Monitor } from 'lucide-react';
+import { MapPin, Plus, CheckCircle2, XCircle, Clock, Trash2, Video, Pencil, Monitor, DoorOpen } from 'lucide-react';
 import { toast } from 'sonner';
 import { apiBase } from '../utils/api';
 
@@ -59,6 +59,7 @@ export function StudyGroupsPage({ accessToken, userId, currentUserUsername, room
   const ITEMS_PER_PAGE = 5;
   const [page, setPage] = useState(1);
   const [recentGroupId, setRecentGroupId] = useState<string | null>(null);
+  const fetchInFlightRef = useRef(false);
 
   // Restore the most recently created room across unmount/remount (e.g., when creating online rooms).
   useEffect(() => {
@@ -108,6 +109,8 @@ export function StudyGroupsPage({ accessToken, userId, currentUserUsername, room
   }, []);
 
   const fetchGroups = async () => {
+    if (fetchInFlightRef.current) return;
+    fetchInFlightRef.current = true;
     try {
       const response = await fetch(`${apiBase}/study-groups`);
       const data = await response.json();
@@ -151,6 +154,8 @@ export function StudyGroupsPage({ accessToken, userId, currentUserUsername, room
       setGroups(newGroups);
     } catch (error) {
       console.error('Failed to fetch study groups:', error);
+    } finally {
+      fetchInFlightRef.current = false;
     }
   };
 
@@ -459,7 +464,7 @@ export function StudyGroupsPage({ accessToken, userId, currentUserUsername, room
                         </div>
                       ) : !group.meetingId && (isHost || isMember) ? (
                         <Button className="w-full font-semibold" onClick={() => onJoinRoom(group.id)}>
-                          <Video className="size-4 mr-2" />
+                          <DoorOpen className="size-4 mr-2" />
                           Enter room
                         </Button>
                       ) : null}
