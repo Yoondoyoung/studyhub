@@ -36,39 +36,6 @@ interface StudyGroupsPageProps {
   onJoinMeeting?: (meetingId: string) => void;
 }
 
-const pastelColors = [
-  { bg: 'from-purple-100 to-purple-200', border: 'border-purple-200' },
-  { bg: 'from-green-100 to-green-200', border: 'border-green-200' },
-  { bg: 'from-pink-100 to-pink-200', border: 'border-pink-200' },
-  { bg: 'from-blue-100 to-blue-200', border: 'border-blue-200' },
-  { bg: 'from-amber-100 to-amber-200', border: 'border-amber-200' },
-  { bg: 'from-cyan-100 to-cyan-200', border: 'border-cyan-200' },
-];
-
-const subjectIcons: Record<string, string> = {
-  Mathematics: '🔢',
-  Math: '🔢',
-  Calculus: '🔢',
-  Science: '🔬',
-  English: '📚',
-  History: '📜',
-  Computer: '💻',
-  Programming: '💻',
-  Art: '🎨',
-  Music: '🎵',
-  Physics: '⚛️',
-  Chemistry: '🧪',
-  Biology: '🧬',
-  default: '📖'
-};
-
-const getSubjectIcon = (topic: string) => {
-  const subject = Object.keys(subjectIcons).find(key => 
-    topic.toLowerCase().includes(key.toLowerCase())
-  );
-  return subject ? subjectIcons[subject] : subjectIcons.default;
-};
-
 const defaultGroupForm = {
   location: '',
   date: '',
@@ -376,7 +343,7 @@ export function StudyGroupsPage({ accessToken, userId, currentUserUsername, room
         <div className="flex justify-end items-center">
           <Dialog open={isCreateDialogOpen} onOpenChange={(open) => { setIsCreateDialogOpen(open); if (!open) setCreateStep('choice'); }}>
           <DialogTrigger asChild>
-            <Button className="bg-gradient-to-r from-purple-500 to-pink-500 hover:from-purple-600 hover:to-pink-600">
+            <Button>
               <Plus className="size-4 mr-2" />
               Create Room
             </Button>
@@ -508,7 +475,7 @@ export function StudyGroupsPage({ accessToken, userId, currentUserUsername, room
                   </div>
                   <Button
                     onClick={handleCreateGroup}
-                    className="w-full bg-gradient-to-r from-purple-500 to-pink-500 hover:from-purple-600 hover:to-pink-600"
+                    className="w-full"
                   >
                     Create Study Group
                   </Button>
@@ -684,7 +651,7 @@ export function StudyGroupsPage({ accessToken, userId, currentUserUsername, room
               </div>
               <Button 
                 onClick={handleUpdateGroup} 
-                className="w-full bg-gradient-to-r from-purple-500 to-pink-500 hover:from-purple-600 hover:to-pink-600"
+                className="w-full"
               >
                 Save changes
               </Button>
@@ -706,42 +673,35 @@ export function StudyGroupsPage({ accessToken, userId, currentUserUsername, room
             const hasApplied = (group.applicants ?? []).includes(userId);
             const isFull = (group.participants?.length ?? 0) >= (group.maxParticipants ?? 10);
             const isMeetingStarted = new Date() >= new Date(`${group.date ?? ''}T${group.time || '00:00'}`);
-            const colorScheme = pastelColors[index % pastelColors.length];
-            const icon = getSubjectIcon(group.topic ?? '');
 
               return (
                 <Card 
                   key={group.id} 
-                  className={`bg-gradient-to-br ${colorScheme.bg} ${colorScheme.border} border-2 overflow-hidden transition-all hover:shadow-lg hover:scale-105`}
+                  className="overflow-hidden rounded-2xl border border-white/70 bg-white/80 backdrop-blur shadow-[0_16px_40px_rgba(15,23,42,0.10)] transition-all hover:-translate-y-0.5 hover:shadow-[0_24px_70px_rgba(15,23,42,0.14)]"
                 >
                 <CardContent className="p-6 space-y-4">
                   {/* Header with icon and title */}
                   <div className="flex items-start justify-between">
-                    <div className="flex-1">
-                      <div className="flex items-center gap-3 mb-2">
-                        <div className="text-4xl">{icon}</div>
-                        <div className="flex-1">
-                          <h3 className="font-bold text-xl text-gray-900">{group.topic}</h3>
-                          <p className="text-xs text-gray-600 mt-0.5">
-                            Host: {group.hostUsername ?? group.hostId?.slice(0, 8) ?? '—'}
-                          </p>
-                          {isHost && (
-                            <Badge className="mt-1 bg-gradient-to-r from-purple-500 to-pink-500 text-white border-0">
-                              Your Room
-                            </Badge>
-                          )}
-                          {roomUserIsIn === group.id && !isHost && (
-                            <Badge className="mt-1 bg-teal-600 text-white border-0">
-                              You&apos;re in this room
-                            </Badge>
-                          )}
-                        </div>
-                      </div>
+                    <div className="flex-1 pr-2">
+                      <h3 className="font-bold text-xl text-gray-900">{group.topic}</h3>
+                      <p className="text-xs text-gray-600 mt-0.5">
+                        Host: {group.hostUsername ?? group.hostId?.slice(0, 8) ?? '—'}
+                      </p>
+                      {isHost && (
+                        <Badge className="mt-1 bg-gradient-to-r from-purple-500 to-pink-500 text-white border-0">
+                          Your Room
+                        </Badge>
+                      )}
+                      {roomUserIsIn === group.id && !isHost && (
+                        <Badge className="mt-1 bg-black text-white border-0">
+                          You&apos;re in this room
+                        </Badge>
+                      )}
                     </div>
                     <Button
                       variant="ghost"
                       size="sm"
-                      className="h-10 w-10 p-0 hover:bg-white/50"
+                      className="h-10 w-10 p-0 rounded-full hover:bg-gray-100/70"
                       onClick={() => toggleFavorite(group.id)}
                     >
                       <Heart 
@@ -766,20 +726,20 @@ export function StudyGroupsPage({ accessToken, userId, currentUserUsername, room
 
                   {/* Tags */}
                   <div className="flex flex-wrap gap-2">
-                    <Badge variant="secondary" className="bg-white/60 text-gray-700 font-medium">
+                    <Badge variant="secondary" className="bg-gray-100/80 text-gray-700 font-medium">
                       {group.studyType || 'In-person'}
                     </Badge>
-                    <Badge variant="secondary" className="bg-white/60 text-gray-700 font-medium">
+                    <Badge variant="secondary" className="bg-gray-100/80 text-gray-700 font-medium">
                       {group.duration || '2 hours'}
                     </Badge>
-                    <Badge variant="secondary" className="bg-white/60 text-gray-700 font-medium">
+                    <Badge variant="secondary" className="bg-gray-100/80 text-gray-700 font-medium">
                       {group.participants?.length ?? 0}/{group.maxParticipants ?? 10} seats
                     </Badge>
                   </div>
 
                   {/* Applicants management for host */}
                   {isHost && (group.applicants?.length ?? 0) > 0 && (
-                    <div className="pt-3 border-t border-white/50 space-y-2">
+                    <div className="pt-3 border-t border-gray-200/60 space-y-2">
                       <p className="text-sm font-semibold text-gray-900">
                         Pending Requests ({group.applicants?.length ?? 0})
                       </p>
@@ -820,14 +780,15 @@ export function StudyGroupsPage({ accessToken, userId, currentUserUsername, room
                   {group.meetingId && (isHost || isMember) ? (
                     <div className="grid grid-cols-2 gap-2">
                       <Button
-                        className="w-full bg-teal-600 text-white hover:bg-teal-700 font-semibold"
+                        className="w-full font-semibold"
                         onClick={() => onJoinRoom(group.id)}
                       >
                         <Video className="size-4 mr-2" />
                         Enter room
                       </Button>
                       <Button
-                        className="w-full bg-blue-600 text-white hover:bg-blue-700 font-semibold"
+                        variant="outline"
+                        className="w-full font-semibold border-gray-200 bg-white/70 hover:bg-gray-50"
                         onClick={() => group.meetingId && onJoinMeeting?.(group.meetingId)}
                       >
                         <Video className="size-4 mr-2" />
@@ -836,7 +797,7 @@ export function StudyGroupsPage({ accessToken, userId, currentUserUsername, room
                     </div>
                   ) : !group.meetingId && (isHost || isMember) ? (
                     <Button
-                      className="w-full bg-teal-600 text-white hover:bg-teal-700 font-semibold"
+                      className="w-full font-semibold"
                       onClick={() => onJoinRoom(group.id)}
                     >
                       <Video className="size-4 mr-2" />
@@ -846,7 +807,7 @@ export function StudyGroupsPage({ accessToken, userId, currentUserUsername, room
 
                   {!isHost && !isMember && (
                     <Button
-                      className="w-full bg-gray-900 text-white hover:bg-gray-800 font-semibold"
+                      className="w-full font-semibold"
                       disabled={hasApplied || isFull}
                       onClick={() => handleApply(group.id)}
                     >
@@ -859,7 +820,7 @@ export function StudyGroupsPage({ accessToken, userId, currentUserUsername, room
                       <Button
                         variant="outline"
                         size="sm"
-                        className="flex-1 border-purple-200 text-purple-600 hover:bg-purple-50"
+                        className="flex-1 border-gray-200 bg-white/60 hover:bg-gray-50 text-gray-700"
                         onClick={() => openEditDialog(group)}
                       >
                         <Pencil className="size-4 mr-2" />
