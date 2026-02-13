@@ -265,37 +265,66 @@ export function DashboardPage({ accessToken, onOpenChat }: DashboardPageProps) {
       startDate.setDate(endDate.getDate() - (totalCells - 1));
       const startKey = toLocalDateKey(startDate);
       const endKey = toLocalDateKey(endDate);
+      const buildSummary = (totals: Record<string, number>) => {
+        setHeatmapData(totals);
+
+        const daily = Number(totals[getISODateOffset(0)] || 0);
+        const weekly = Array.from({ length: 7 }, (_, i) => Number(totals[getISODateOffset(-i)] || 0))
+          .reduce((acc, item) => acc + item, 0);
+        const monthly = Array.from({ length: 30 }, (_, i) => Number(totals[getISODateOffset(-i)] || 0))
+          .reduce((acc, item) => acc + item, 0);
+
+        const streakDates = Array.from({ length: 7 }, (_, index) => getISODateOffset(-index));
+        const streak = streakDates.map((date) => {
+          const day = new Date(date);
+          const label = day.toLocaleDateString('en-US', { weekday: 'short' }).slice(0, 1);
+          return { day: label, completed: Number(totals[date] || 0) > 0 };
+        });
+
+        setDailyTotal(daily);
+        setWeeklyTotal(weekly);
+        setMonthlyTotal(monthly);
+        setStudyStreak(streak.reverse());
+      };
 
       const response = await fetch(`${apiBase}/study-time-range?start=${startKey}&end=${endKey}`, {
         headers: { Authorization: `Bearer ${accessToken}` }
       });
-      if (!response.ok) throw new Error('Failed to fetch study-time range');
-      const data = await response.json();
-      const rawTotals = data?.totals || {};
-      const totals: Record<string, number> = {};
-      Object.entries(rawTotals).forEach(([rawDateKey, value]) => {
-        const key = String(rawDateKey).slice(0, 10);
-        totals[key] = Number(value || 0);
-      });
-      setHeatmapData(totals);
+      if (response.ok) {
+        const data = await response.json();
+        const rawTotals = data?.totals || {};
+        const totals: Record<string, number> = {};
+        Object.entries(rawTotals).forEach(([rawDateKey, value]) => {
+          const key = String(rawDateKey).slice(0, 10);
+          totals[key] = Number(value || 0);
+        });
+        buildSummary(totals);
+        return;
+      }
 
-      const daily = Number(totals[getISODateOffset(0)] || 0);
-      const weekly = Array.from({ length: 7 }, (_, i) => Number(totals[getISODateOffset(-i)] || 0))
-        .reduce((acc, item) => acc + item, 0);
-      const monthly = Array.from({ length: 30 }, (_, i) => Number(totals[getISODateOffset(-i)] || 0))
-        .reduce((acc, item) => acc + item, 0);
+      // Compatibility fallback when backend route is not yet deployed/restarted.
+      if (response.status === 404) {
+        const dayKeys = Array.from({ length: totalCells }, (_, index) => {
+          const date = new Date(startDate);
+          date.setDate(startDate.getDate() + index);
+          return toLocalDateKey(date);
+        });
+        const results = await Promise.all(
+          dayKeys.map((date) =>
+            fetch(`${apiBase}/study-time/${date}`, {
+              headers: { Authorization: `Bearer ${accessToken}` }
+            }).then((r) => (r.ok ? r.json() : { total: 0 }))
+          )
+        );
+        const totals: Record<string, number> = {};
+        dayKeys.forEach((date, idx) => {
+          totals[date] = Number(results[idx]?.total || 0);
+        });
+        buildSummary(totals);
+        return;
+      }
 
-      const streakDates = Array.from({ length: 7 }, (_, index) => getISODateOffset(-index));
-      const streak = streakDates.map((date) => {
-        const day = new Date(date);
-        const label = day.toLocaleDateString('en-US', { weekday: 'short' }).slice(0, 1);
-        return { day: label, completed: Number(totals[date] || 0) > 0 };
-      });
-
-      setDailyTotal(daily);
-      setWeeklyTotal(weekly);
-      setMonthlyTotal(monthly);
-      setStudyStreak(streak.reverse());
+      throw new Error('Failed to fetch study-time range');
     } catch (error) {
       console.error('Failed to fetch study summary:', error);
     }

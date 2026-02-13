@@ -658,6 +658,55 @@ app.get("/study-time/:date", async (req, res) => {
   }
 });
 
+app.get("/study-time-range", async (req, res) => {
+  try {
+    const user = await requireUser(req);
+    const start = String(req.query.start || "");
+    const end = String(req.query.end || "");
+    if (!start || !end) return res.status(400).json({ error: "Start and end required" });
+
+    const startDate = new Date(`${start}T00:00:00Z`);
+    const endDate = new Date(`${end}T00:00:00Z`);
+    if (Number.isNaN(startDate.getTime()) || Number.isNaN(endDate.getTime())) {
+      return res.status(400).json({ error: "Invalid date" });
+    }
+    if (startDate > endDate) {
+      return res.status(400).json({ error: "Invalid range" });
+    }
+
+    const maxDays = 400;
+    const prefix = `study-time:${user.id}:`;
+    const totals = {};
+
+    const { data: rows, error } = await serviceSupabase
+      .from(KV_TABLE)
+      .select("key, value")
+      .like("key", `${prefix}%`);
+    if (error) throw new Error(error.message);
+
+    const dateTotals = {};
+    for (const row of rows ?? []) {
+      const key = String(row?.key || "");
+      if (!key.startsWith(prefix)) continue;
+      const dateKey = key.slice(prefix.length, prefix.length + 10);
+      dateTotals[dateKey] = Number(row?.value?.total || 0);
+    }
+
+    let current = new Date(startDate);
+    let count = 0;
+    while (current <= endDate && count < maxDays) {
+      const dateKey = current.toISOString().split("T")[0];
+      totals[dateKey] = Number(dateTotals[dateKey] || 0);
+      current.setUTCDate(current.getUTCDate() + 1);
+      count += 1;
+    }
+
+    return res.json({ totals });
+  } catch {
+    return res.status(401).json({ error: "Unauthorized" });
+  }
+});
+
 app.get("/study-groups", async (_req, res) => {
   try {
     const raw = await kvGetByPrefix("study-group:");
