@@ -931,9 +931,13 @@ app.get("/study-groups/:id", async (req, res) => {
     const groupId = req.params.id;
     const group = await kvGet(`study-group:${groupId}`);
     if (!group) return res.status(404).json({ error: "Group not found" });
+    // Ensure participants and applicants are arrays
+    if (!Array.isArray(group.participants)) group.participants = [];
+    if (!Array.isArray(group.applicants)) group.applicants = [];
+    
     if (applyNoShowCleanup(group)) await kvSet(`study-group:${groupId}`, group);
     const participantsWithNames = [];
-    for (const id of group.participants || []) {
+    for (const id of group.participants) {
       const profile = await kvGet(`user:${id}`);
       participantsWithNames.push({
         id,
@@ -954,7 +958,10 @@ app.get("/study-groups/:id/presence", async (req, res) => {
     const groupId = req.params.id;
     const group = await kvGet(`study-group:${groupId}`);
     if (!group) return res.status(404).json({ error: "Group not found" });
-    const isParticipant = group.participants?.includes(user.id);
+    // Ensure participants is an array
+    if (!Array.isArray(group.participants)) group.participants = [];
+    
+    const isParticipant = group.participants.includes(user.id);
     const isHost = group.hostId === user.id;
     if (!isParticipant && !isHost) {
       return res.status(403).json({ error: "Not accepted" });
@@ -975,7 +982,10 @@ app.get("/study-groups/:id/chat", async (req, res) => {
     if (!roomId) return res.status(400).json({ error: "Room id required" });
     const group = await kvGet(`study-group:${roomId}`);
     if (!group) return res.status(404).json({ error: "Group not found" });
-    const isParticipant = group.participants?.includes(user.id);
+    // Ensure participants is an array
+    if (!Array.isArray(group.participants)) group.participants = [];
+    
+    const isParticipant = group.participants.includes(user.id);
     const isHost = group.hostId === user.id;
     if (!isParticipant && !isHost) {
       return res.status(403).json({ error: "Not accepted" });
@@ -995,7 +1005,10 @@ app.post("/study-groups/:id/presence", async (req, res) => {
     const groupId = req.params.id;
     const group = await kvGet(`study-group:${groupId}`);
     if (!group) return res.status(404).json({ error: "Group not found" });
-    const participantIds = group.participants || [];
+    // Ensure participants is an array
+    if (!Array.isArray(group.participants)) group.participants = [];
+    
+    const participantIds = group.participants;
     const isParticipant = participantIds.includes(user.id);
     const isHost = group.hostId === user.id;
     if (!isParticipant && !isHost) {
@@ -1099,6 +1112,10 @@ app.post("/study-groups/:id/apply", async (req, res) => {
     const groupId = req.params.id;
     const group = await kvGet(`study-group:${groupId}`);
     if (!group) return res.status(404).json({ error: "Group not found" });
+    // Ensure participants and applicants are arrays
+    if (!Array.isArray(group.participants)) group.participants = [];
+    if (!Array.isArray(group.applicants)) group.applicants = [];
+    
     if (group.participants.includes(user.id)) {
       return res.status(400).json({ error: "Already a member" });
     }
@@ -1122,6 +1139,10 @@ app.post("/study-groups/:id/manage", async (req, res) => {
 
     const { applicantId, action } = req.body ?? {};
     if (action === "accept") {
+      // Ensure applicants and participants are arrays
+      if (!Array.isArray(group.applicants)) group.applicants = [];
+      if (!Array.isArray(group.participants)) group.participants = [];
+      
       group.applicants = group.applicants.filter((id) => id !== applicantId);
       if (!group.participants.includes(applicantId)) {
         group.participants.push(applicantId);
@@ -3567,7 +3588,15 @@ wss.on("connection", async (socket, req) => {
           const roomId = String(payload?.roomId ?? "");
           if (!roomId) return;
           const group = await kvGet(`study-group:${roomId}`);
-          if (!group || !group.participants?.includes(socket.userId)) {
+          if (!group) {
+            socket.send(JSON.stringify({ type: "room:error", message: "Not accepted" }));
+            return;
+          }
+          // Ensure participants is an array
+          if (!Array.isArray(group.participants)) group.participants = [];
+          const isParticipant = group.participants.includes(socket.userId);
+          const isHost = group.hostId === socket.userId;
+          if (!isParticipant && !isHost) {
             socket.send(JSON.stringify({ type: "room:error", message: "Not accepted" }));
             return;
           }
@@ -3589,7 +3618,15 @@ wss.on("connection", async (socket, req) => {
           if (!roomId || !content) return;
           if (!socket.userId) return;
           const group = await kvGet(`study-group:${roomId}`);
-          if (!group || !group.participants?.includes(socket.userId)) {
+          if (!group) {
+            socket.send(JSON.stringify({ type: "room:error", message: "Not accepted" }));
+            return;
+          }
+          // Ensure participants is an array
+          if (!Array.isArray(group.participants)) group.participants = [];
+          const isParticipant = group.participants.includes(socket.userId);
+          const isHost = group.hostId === socket.userId;
+          if (!isParticipant && !isHost) {
             socket.send(JSON.stringify({ type: "room:error", message: "Not accepted" }));
             return;
           }
