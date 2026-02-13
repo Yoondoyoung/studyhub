@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useMemo, useRef } from 'react';
 import { Button } from './ui/button';
 import { Input } from './ui/input';
 import { Label } from './ui/label';
@@ -44,6 +44,20 @@ interface StudyRoom {
   icon?: string;
 }
 
+interface DashboardCache {
+  todos: Todo[];
+  dailyTotal: number;
+  weeklyTotal: number;
+  monthlyTotal: number;
+  dailyGoal: number;
+  weeklyGoal: number;
+  monthlyGoal: number;
+  friends: Friend[];
+  nearbyRooms: StudyRoom[];
+  studyStreak: { day: string; completed: boolean }[];
+  heatmapData: Record<string, number>;
+}
+
 export function DashboardPage({ accessToken, onOpenChat }: DashboardPageProps) {
   const TIMER_STORAGE_KEY = 'studyhub_active_timer';
   const [todos, setTodos] = useState<Todo[]>([]);
@@ -53,6 +67,7 @@ export function DashboardPage({ accessToken, onOpenChat }: DashboardPageProps) {
   const [isAddDialogOpen, setIsAddDialogOpen] = useState(false);
   const [isEditDialogOpen, setIsEditDialogOpen] = useState(false);
   const [editingTodoId, setEditingTodoId] = useState<string | null>(null);
+  const [isInitialLoading, setIsInitialLoading] = useState(true);
   const [activeTimer, setActiveTimer] = useState<string | null>(null);
   const [timerSeconds, setTimerSeconds] = useState(0);
   
@@ -67,7 +82,16 @@ export function DashboardPage({ accessToken, onOpenChat }: DashboardPageProps) {
   const [friends, setFriends] = useState<Friend[]>([]);
   const [nearbyRooms, setNearbyRooms] = useState<StudyRoom[]>([]);
   const [studyStreak, setStudyStreak] = useState<{ day: string; completed: boolean }[]>([]);
-  const heatmapColumns = 52;
+  const heatmapWeekColumns = 53;
+  const heatmapCellSize = 9;
+  const heatmapCellGap = 3.5;
+  const [heatmapData, setHeatmapData] = useState<Record<string, number>>({});
+  const [heatmapTooltip, setHeatmapTooltip] = useState<{
+    date: string;
+    x: number;
+    y: number;
+  } | null>(null);
+  const heatmapRef = useRef<HTMLDivElement | null>(null);
 
 
   const [newTodo, setNewTodo] = useState({
@@ -84,15 +108,88 @@ export function DashboardPage({ accessToken, onOpenChat }: DashboardPageProps) {
     shared: false
   });
 
+  const toLocalDateKey = (date: Date) => {
+    const y = date.getFullYear();
+    const m = String(date.getMonth() + 1).padStart(2, '0');
+    const d = String(date.getDate()).padStart(2, '0');
+    return `${y}-${m}-${d}`;
+  };
+
+  const dashboardCacheKey = `dashboard_cache:${accessToken.slice(-12)}`;
+
   useEffect(() => {
-    fetchTodos();
-    fetchDailyStudyTime();
-    fetchWeeklyMonthlyStudyTime();
-    fetchGoals();
-    fetchFriendsList();
-    fetchStudyGroups();
-    fetchStudyStreak();
-  }, []);
+    let cancelled = false;
+    const loadInitialData = async () => {
+      let hasCache = false;
+      try {
+        const raw = sessionStorage.getItem(dashboardCacheKey);
+        if (raw) {
+          const cached = JSON.parse(raw) as DashboardCache;
+          setTodos(cached.todos || []);
+          setDailyTotal(Number(cached.dailyTotal || 0));
+          setWeeklyTotal(Number(cached.weeklyTotal || 0));
+          setMonthlyTotal(Number(cached.monthlyTotal || 0));
+          setDailyGoal(Number(cached.dailyGoal || 0));
+          setWeeklyGoal(Number(cached.weeklyGoal || 0));
+          setMonthlyGoal(Number(cached.monthlyGoal || 0));
+          setFriends(cached.friends || []);
+          setNearbyRooms(cached.nearbyRooms || []);
+          setStudyStreak(cached.studyStreak || []);
+          setHeatmapData(cached.heatmapData || {});
+          hasCache = true;
+          if (!cancelled) setIsInitialLoading(false);
+        }
+      } catch {
+        // ignore malformed cache
+      }
+
+      if (!hasCache) setIsInitialLoading(true);
+      await Promise.all([
+        fetchTodos(),
+        fetchStudyTimeSummary(),
+        fetchGoals(),
+        fetchFriendsList(),
+        fetchStudyGroups(),
+      ]);
+      if (!cancelled) setIsInitialLoading(false);
+    };
+    loadInitialData();
+    return () => {
+      cancelled = true;
+    };
+  }, [accessToken, dashboardCacheKey]);
+
+  useEffect(() => {
+    if (isInitialLoading) return;
+    const payload: DashboardCache = {
+      todos,
+      dailyTotal,
+      weeklyTotal,
+      monthlyTotal,
+      dailyGoal,
+      weeklyGoal,
+      monthlyGoal,
+      friends,
+      nearbyRooms,
+      studyStreak,
+      heatmapData,
+    };
+    sessionStorage.setItem(dashboardCacheKey, JSON.stringify(payload));
+  }, [
+    dashboardCacheKey,
+    isInitialLoading,
+    todos,
+    dailyTotal,
+    weeklyTotal,
+    monthlyTotal,
+    dailyGoal,
+    weeklyGoal,
+    monthlyGoal,
+    friends,
+    nearbyRooms,
+    studyStreak,
+    heatmapData,
+  ]);
 
   useEffect(() => {
     const loadStoredTimer = () => {
@@ -148,55 +245,59 @@ export function DashboardPage({ accessToken, onOpenChat }: DashboardPageProps) {
     }
   };
 
-  const fetchDailyStudyTime = async () => {
-    try {
-      const today = new Date().toISOString().split('T')[0];
-      const response = await fetch(`${apiBase}/study-time/${today}`, {
-        headers: { Authorization: `Bearer ${accessToken}` }
-      });
-      const data = await response.json();
-      if (data.total > 0) {
-        setDailyTotal(data.total);
-      }
-    } catch (error) {
-      console.error('Failed to fetch study time:', error);
-    }
-  };
-
   const getISODateOffset = (offsetDays: number) => {
     const date = new Date();
     date.setDate(date.getDate() + offsetDays);
-    return date.toISOString().split('T')[0];
+    return toLocalDateKey(date);
   };
 
-  const fetchWeeklyMonthlyStudyTime = async () => {
+  const getHeatmapTotal = (dateKey: string) => {
+    return Number(heatmapData[dateKey] || 0);
+  };
+
+  const fetchStudyTimeSummary = async () => {
     try {
-      const weeklyDates = Array.from({ length: 7 }, (_, index) => getISODateOffset(-index));
-      const monthlyDates = Array.from({ length: 30 }, (_, index) => getISODateOffset(-index));
+      const today = new Date();
+      const extraDays = today.getDay() === 0 ? 0 : today.getDay();
+      const totalCells = heatmapWeekColumns * 7 + extraDays;
+      const endDate = new Date();
+      const startDate = new Date();
+      startDate.setDate(endDate.getDate() - (totalCells - 1));
+      const startKey = toLocalDateKey(startDate);
+      const endKey = toLocalDateKey(endDate);
 
-      const weeklyResponses = await Promise.all(
-        weeklyDates.map((date) =>
-          fetch(`${apiBase}/study-time/${date}`, {
-            headers: { Authorization: `Bearer ${accessToken}` }
-          }).then((response) => response.json())
-        )
-      );
+      const response = await fetch(`${apiBase}/study-time-range?start=${startKey}&end=${endKey}`, {
+        headers: { Authorization: `Bearer ${accessToken}` }
+      });
+      if (!response.ok) throw new Error('Failed to fetch study-time range');
+      const data = await response.json();
+      const rawTotals = data?.totals || {};
+      const totals: Record<string, number> = {};
+      Object.entries(rawTotals).forEach(([rawDateKey, value]) => {
+        const key = String(rawDateKey).slice(0, 10);
+        totals[key] = Number(value || 0);
+      });
+      setHeatmapData(totals);
 
-      const monthlyResponses = await Promise.all(
-        monthlyDates.map((date) =>
-          fetch(`${apiBase}/study-time/${date}`, {
-            headers: { Authorization: `Bearer ${accessToken}` }
-          }).then((response) => response.json())
-        )
-      );
+      const daily = Number(totals[getISODateOffset(0)] || 0);
+      const weekly = Array.from({ length: 7 }, (_, i) => Number(totals[getISODateOffset(-i)] || 0))
+        .reduce((acc, item) => acc + item, 0);
+      const monthly = Array.from({ length: 30 }, (_, i) => Number(totals[getISODateOffset(-i)] || 0))
+        .reduce((acc, item) => acc + item, 0);
 
-      const weeklySum = weeklyResponses.reduce((acc, item) => acc + (item.total || 0), 0);
-      const monthlySum = monthlyResponses.reduce((acc, item) => acc + (item.total || 0), 0);
+      const streakDates = Array.from({ length: 7 }, (_, index) => getISODateOffset(-index));
+      const streak = streakDates.map((date) => {
+        const day = new Date(date);
+        const label = day.toLocaleDateString('en-US', { weekday: 'short' }).slice(0, 1);
+        return { day: label, completed: Number(totals[date] || 0) > 0 };
+      });
 
-      setWeeklyTotal(weeklySum);
-      setMonthlyTotal(monthlySum);
+      setDailyTotal(daily);
+      setWeeklyTotal(weekly);
+      setMonthlyTotal(monthly);
+      setStudyStreak(streak.reverse());
     } catch (error) {
-      console.error('Failed to fetch weekly/monthly study time:', error);
+      console.error('Failed to fetch study summary:', error);
     }
   };
 
@@ -222,27 +323,6 @@ export function DashboardPage({ accessToken, onOpenChat }: DashboardPageProps) {
     }
   };
 
-  const fetchStudyStreak = async () => {
-    try {
-      const dates = Array.from({ length: 7 }, (_, index) => getISODateOffset(-index));
-      const responses = await Promise.all(
-        dates.map((date) =>
-          fetch(`${apiBase}/study-time/${date}`, {
-            headers: { Authorization: `Bearer ${accessToken}` }
-          }).then((response) => response.json())
-        )
-      );
-      const streak = dates.map((date, index) => {
-        const day = new Date(date);
-        const label = day.toLocaleDateString('en-US', { weekday: 'short' }).slice(0, 1);
-        return { day: label, completed: (responses[index]?.total || 0) > 0 };
-      });
-      setStudyStreak(streak.reverse());
-    } catch (error) {
-      console.error('Failed to fetch study streak:', error);
-    }
-  };
-
   const fetchGoals = async () => {
     try {
       const response = await fetch(`${apiBase}/settings`, {
@@ -257,6 +337,81 @@ export function DashboardPage({ accessToken, onOpenChat }: DashboardPageProps) {
     } catch (error) {
       console.error('Failed to fetch goals:', error);
     }
+  };
+
+  const heatmapExtraDays = useMemo(() => {
+    const today = new Date();
+    return today.getDay() === 0 ? 0 : today.getDay();
+  }, []);
+
+  const heatmapVisibleColumns = useMemo(
+    () => heatmapWeekColumns + (heatmapExtraDays > 0 ? 1 : 0),
+    [heatmapWeekColumns, heatmapExtraDays]
+  );
+
+  const heatmapGridWidth = useMemo(
+    () => heatmapVisibleColumns * heatmapCellSize + (heatmapVisibleColumns - 1) * heatmapCellGap,
+    [heatmapVisibleColumns, heatmapCellSize, heatmapCellGap]
+  );
+
+  const heatmapDates = useMemo(() => {
+    const today = new Date();
+    today.setHours(0, 0, 0, 0);
+
+    const currentDayOfWeek = today.getDay(); // 0 = Sunday
+    const sundayOfThisWeek = new Date(today);
+    sundayOfThisWeek.setDate(today.getDate() - currentDayOfWeek);
+
+    const startSunday = new Date(sundayOfThisWeek);
+    startSunday.setDate(sundayOfThisWeek.getDate() - (heatmapWeekColumns - 1) * 7);
+
+    const startMonday = new Date(startSunday);
+    startMonday.setDate(startSunday.getDate() - 6);
+
+    const totalCells = heatmapWeekColumns * 7 + heatmapExtraDays;
+    return Array.from({ length: totalCells }, (_, index) => {
+      const date = new Date(startMonday);
+      date.setDate(startMonday.getDate() + index);
+      return toLocalDateKey(date);
+    });
+  }, [heatmapWeekColumns, heatmapExtraDays, toLocalDateKey]);
+
+  const heatmapMonths = useMemo(() => {
+    return Array.from({ length: heatmapVisibleColumns }, (_, col) => {
+      const index = col * 7;
+      const dateKey = heatmapDates[index];
+      if (!dateKey) return '';
+      const date = new Date(`${dateKey}T00:00:00`);
+      const label = date.toLocaleDateString('en-US', { month: 'short' });
+      if (col === 0) return label;
+      const prevKey = heatmapDates[(col - 1) * 7];
+      if (!prevKey) return label;
+      const prev = new Date(`${prevKey}T00:00:00`);
+      const prevLabel = prev.toLocaleDateString('en-US', { month: 'short' });
+      return label !== prevLabel ? label : '';
+    });
+  }, [heatmapDates, heatmapVisibleColumns]);
+
+  const formatHeatmapDuration = (totalSeconds: number) => {
+    const minutes = Math.round(totalSeconds / 60);
+    if (minutes <= 0) return 'No study';
+    const hours = Math.floor(minutes / 60);
+    const mins = minutes % 60;
+    if (hours <= 0) return `${minutes}m`;
+    if (mins === 0) return `${hours}h`;
+    return `${hours}h ${mins}m`;
+  };
+
+  const handleHeatmapHover = (
+    event: React.MouseEvent<HTMLDivElement>,
+    dateKey: string
+  ) => {
+    const rect = event.currentTarget.getBoundingClientRect();
+    setHeatmapTooltip({
+      date: dateKey,
+      x: rect.left + rect.width / 2,
+      y: rect.top - 8,
+    });
   };
 
 
@@ -390,7 +545,7 @@ export function DashboardPage({ accessToken, onOpenChat }: DashboardPageProps) {
             'Content-Type': 'application/json',
             Authorization: `Bearer ${accessToken}`
           },
-          body: JSON.stringify({ duration: elapsedSeconds })
+          body: JSON.stringify({ duration: elapsedSeconds, date: getISODateOffset(0) })
         }),
         fetch(`${apiBase}/todos/${todo.id}`, {
           method: 'PUT',
@@ -409,7 +564,7 @@ export function DashboardPage({ accessToken, onOpenChat }: DashboardPageProps) {
 
       setDailyTotal(prev => prev + elapsedSeconds);
       fetchTodos();
-      fetchWeeklyMonthlyStudyTime();
+      fetchStudyTimeSummary();
       toast.success(`🎯 Logged ${Math.floor(elapsedSeconds / 60)} minutes!`);
     } catch (error) {
       console.error('Failed to save study time:', error);
@@ -593,6 +748,14 @@ export function DashboardPage({ accessToken, onOpenChat }: DashboardPageProps) {
       toast.error('Failed to update todo');
     }
   };
+
+  if (isInitialLoading) {
+    return (
+      <div className="rounded-[36px] bg-white/60 shadow-[0_30px_80px_rgba(15,23,42,0.08)] p-8 min-h-[720px] flex items-center justify-center">
+        <p className="text-sm text-gray-500">Loading dashboard...</p>
+      </div>
+    );
+  }
 
   return (
     <div className="space-y-6">
@@ -814,32 +977,94 @@ export function DashboardPage({ accessToken, onOpenChat }: DashboardPageProps) {
           </div>
 
           <div className="rounded-[36px] bg-white/55 shadow-[0_20px_60px_rgba(15,23,42,0.08)] p-4">
-            <div className="rounded-[28px] bg-white/85 shadow-[0_16px_40px_rgba(15,23,42,0.06)] p-5">
-              <div className="grid grid-cols-8 text-xs text-gray-400 mb-3 px-1">
-                {['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug'].map((month) => (
-                  <span key={month} className="text-center">
-                    {month}
-                  </span>
-                ))}
-              </div>
-              <div className="overflow-x-auto">
+            <div className="rounded-[28px] bg-white/85 shadow-[0_16px_40px_rgba(15,23,42,0.06)] p-4 min-h-[244px]">
+            
+              <div className="flex gap-2 mb-2">
                 <div
-                  className="grid"
-                  style={{
-                    gridTemplateColumns: `repeat(${heatmapColumns}, 10px)`,
-                    columnGap: '4px',
-                    rowGap: '5px'
+                  className="grid text-xs text-gray-400 px-1 shrink-0"
+                  style={{ 
+                    gridTemplateColumns: `repeat(${heatmapVisibleColumns}, ${heatmapCellSize}px)`, 
+                    columnGap: `${heatmapCellGap}px`,
+                    width: `${heatmapGridWidth}px`
                   }}
                 >
-                  {Array.from({ length: 7 * heatmapColumns }).map((_, index) => {
-                    const isActive = index < 9;
-                    const isMid = index >= 9 && index < 13;
-                    const cellColor = isActive ? 'bg-[#22c55e]' : isMid ? 'bg-[#86efac]' : 'bg-gray-200';
-                    return <div key={index} className={`w-3 h-3 rounded-[3px] ${cellColor}`} />;
-                  })}
+                  {heatmapMonths.map((month, index) => (
+                    <span key={`${month}-${index}`} className="text-center">
+                      {month}
+                    </span>
+                  ))}
                 </div>
               </div>
-              <div className="flex items-center justify-between mt-4 text-xs text-gray-400">
+              <div className="relative" ref={heatmapRef}>
+                {heatmapTooltip && (
+                  <div
+                    className="fixed z-50 -translate-x-1/2 -translate-y-full rounded-md bg-gray-900 text-white text-[11px] px-2 py-1 shadow-lg pointer-events-none whitespace-nowrap"
+                    style={{ left: `${heatmapTooltip.x}px`, top: `${heatmapTooltip.y}px` }}
+                  >
+                    <div className="font-medium">
+                      {formatHeatmapDuration(getHeatmapTotal(heatmapTooltip.date))}
+                    </div>
+                    <div className="text-gray-300">
+                      {new Date(`${heatmapTooltip.date}T00:00:00`).toLocaleDateString('en-US', {
+                        month: 'short',
+                        day: 'numeric',
+                        year: 'numeric'
+                      })}
+                    </div>
+                  </div>
+                )}
+                <div className="flex gap-2">
+                  <div
+                    className="flex flex-col text-xs text-gray-400 shrink-0"
+                    style={{ gap: `${heatmapCellGap}px`, paddingTop: `${heatmapCellGap / 2}px` }}
+                  >
+                    {['M', '', 'W', '', 'F', '', ''].map((day, index) => (
+                      <div key={index} className="flex items-center" style={{ height: `${heatmapCellSize}px` }}>
+                        {day}
+                      </div>
+                    ))}
+                  </div>
+                  <div
+                    className="grid shrink-0"
+                    style={{
+                      gridAutoFlow: 'column',
+                      gridAutoColumns: `${heatmapCellSize}px`,
+                      gridTemplateRows: `repeat(7, ${heatmapCellSize}px)`,
+                      columnGap: `${heatmapCellGap}px`,
+                      rowGap: `${heatmapCellGap}px`,
+                      width: `${heatmapGridWidth}px`
+                    }}
+                  >
+                    {heatmapDates.map((dateKey, index) => {
+                      const totalSeconds = getHeatmapTotal(dateKey);
+                      const minutes = totalSeconds / 60;
+                      let cellColor = 'bg-gray-200';
+                      if (minutes >= 61) cellColor = 'bg-[#22c55e]';
+                      else if (minutes >= 31) cellColor = 'bg-[#86efac]';
+                      else if (minutes >= 5) cellColor = 'bg-[#d1fae5]';
+                      return (
+                        <div
+                          key={dateKey}
+                          className={cellColor}
+                          style={{
+                            width: `${heatmapCellSize}px`,
+                            height: `${heatmapCellSize}px`,
+                            borderRadius: '2px'
+                          }}
+                          onMouseEnter={(event) => handleHeatmapHover(event, dateKey)}
+                          onMouseLeave={() => setHeatmapTooltip(null)}
+                          title={`${formatHeatmapDuration(totalSeconds)} on ${new Date(`${dateKey}T00:00:00`).toLocaleDateString('en-US', {
+                            month: 'short',
+                            day: 'numeric',
+                            year: 'numeric'
+                          })}`}
+                        />
+                      );
+                    })}
+                  </div>
+                </div>
+              </div>
+              <div className="flex items-center justify-between mt-3 text-xs text-gray-400">
                 <span>Learn how we count contributions</span>
                 <div className="flex items-center gap-2">
                   <span>Less</span>
@@ -990,40 +1215,33 @@ export function DashboardPage({ accessToken, onOpenChat }: DashboardPageProps) {
           <div className="rounded-[36px] bg-white/60 shadow-[0_30px_80px_rgba(15,23,42,0.08)] p-6 space-y-6 h-full">
             <div className="bg-white/90 rounded-3xl shadow-[0_20px_60px_rgba(15,23,42,0.08)] p-5">
               <h3 className="text-base font-semibold text-gray-900 mb-4">Nearby Study Rooms</h3>
-              <div className="space-y-3">
-                {(nearbyRooms.length ? nearbyRooms.slice(0, 3) : [
-                  { id: 'placeholder-1', topic: 'Library Quiet Zone', location: 'Library Quiet Zone', icon: '📚' },
-                  { id: 'placeholder-2', topic: 'Library Quiet Zone', location: 'Library Quiet Zone', icon: '📚' },
-                  { id: 'placeholder-3', topic: 'Library Quiet Zone', location: 'Library Quiet Zone', icon: '📚' }
-                ]).map((room) => (
-                  <button
-                    key={room.id}
-                    className="w-full flex items-center gap-3 px-3 py-2 bg-gray-100/70 rounded-full hover:bg-gray-100 transition-colors text-left"
-                  >
-                    <div className="size-9 bg-white rounded-full flex items-center justify-center text-base shadow-sm ring-4 ring-white/80">
-                      {room.icon || '📚'}
-                    </div>
-                    <span className="text-xs font-medium text-gray-900">{room.topic}</span>
-                  </button>
-                ))}
-              </div>
-              <button className="mt-4 w-full text-xs text-gray-400 tracking-[0.2em] underline underline-offset-4">
-                MORE
-              </button>
+              {nearbyRooms.length === 0 ? (
+                <p className="text-xs text-gray-400">No study rooms nearby yet.</p>
+              ) : (
+                <div className="space-y-3">
+                  {nearbyRooms.slice(0, 3).map((room) => (
+                    <button
+                      key={room.id}
+                      className="w-full flex items-center gap-3 px-3 py-2 bg-gray-100/70 rounded-full hover:bg-gray-100 transition-colors text-left"
+                    >
+                      <div className="size-9 bg-white rounded-full flex items-center justify-center text-base shadow-sm ring-4 ring-white/80">
+                        {room.icon || '📚'}
+                      </div>
+                      <span className="text-xs font-medium text-gray-900">{room.topic}</span>
+                    </button>
+                  ))}
+                </div>
+              )}
             </div>
 
             <div className="bg-white/90 rounded-3xl shadow-[0_20px_60px_rgba(15,23,42,0.08)] p-5">
               <h3 className="text-base font-semibold text-gray-900 mb-4">Friends</h3>
-              <div className="space-y-4">
-                {(friends.length ? friends.slice(0, 4) : Array.from({ length: 4 }).map((_, index) => ({
-                  id: `placeholder-${index}`,
-                  username: 'Howon',
-                  email: '',
-                  lastActivityAt: index % 2 === 0 ? new Date().toISOString() : null,
-                  profileImageUrl: ''
-                }))).map((friend) => {
+              {friends.length === 0 ? (
+                <p className="text-xs text-gray-400">No friends yet.</p>
+              ) : (
+                <div className="space-y-4">
+                {friends.slice(0, 4).map((friend) => {
                   const status = getActivityStatus(friend);
-                  const isPlaceholder = friend.id.startsWith('placeholder-');
                   return (
                     <div key={friend.id} className="flex items-center justify-between">
                       <div className="flex items-center gap-3">
@@ -1045,15 +1263,10 @@ export function DashboardPage({ accessToken, onOpenChat }: DashboardPageProps) {
                         </div>
                       </div>
                       <button
-                        className={`px-3 py-1 rounded-full text-[10px] font-semibold ${
-                          isPlaceholder
-                            ? 'bg-gray-100 text-gray-300 cursor-not-allowed'
-                            : 'bg-rose-100 text-rose-600'
-                        }`}
+                        className="px-3 py-1 rounded-full text-[10px] font-semibold bg-rose-100 text-rose-600"
                         onClick={() => {
-                          if (!isPlaceholder) onOpenChat(friend);
+                          onOpenChat(friend);
                         }}
-                        disabled={isPlaceholder}
                       >
                         CHAT
                       </button>
@@ -1061,6 +1274,7 @@ export function DashboardPage({ accessToken, onOpenChat }: DashboardPageProps) {
                   );
                 })}
               </div>
+              )}
             </div>
 
             <div className="bg-white/90 rounded-3xl shadow-[0_20px_60px_rgba(15,23,42,0.08)] p-4">
