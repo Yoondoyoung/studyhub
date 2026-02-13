@@ -957,12 +957,15 @@ app.get("/study-groups/:id/presence", async (req, res) => {
     const user = await requireUser(req);
     const groupId = req.params.id;
     const group = await kvGet(`study-group:${groupId}`);
+    console.log("[presence:get] user", user.id, "groupId", groupId, "group?", !!group);
     if (!group) return res.status(404).json({ error: "Group not found" });
     // Ensure participants is an array
     if (!Array.isArray(group.participants)) group.participants = [];
+    console.log("[presence:get] participants", group.participants, "hostId", group.hostId);
     const isParticipant = group.participants.includes(user.id);
     const isHost = group.hostId === user.id;
     if (!isParticipant && !isHost) {
+      console.log("[presence:get] 403 Not accepted for user", user.id, "participants", group.participants);
       return res.status(403).json({ error: "Not accepted" });
     }
     const presence = (await kvGet(`room-presence:${groupId}`)) || { users: [] };
@@ -980,12 +983,15 @@ app.get("/study-groups/:id/chat", async (req, res) => {
     const roomId = String(req.params.id || "");
     if (!roomId) return res.status(400).json({ error: "Room id required" });
     const group = await kvGet(`study-group:${roomId}`);
+    console.log("[chat:get] user", user.id, "roomId", roomId, "group?", !!group);
     if (!group) return res.status(404).json({ error: "Group not found" });
     // Ensure participants is an array
     if (!Array.isArray(group.participants)) group.participants = [];
+    console.log("[chat:get] participants", group.participants, "hostId", group.hostId);
     const isParticipant = group.participants.includes(user.id);
     const isHost = group.hostId === user.id;
     if (!isParticipant && !isHost) {
+      console.log("[chat:get] 403 Not accepted for user", user.id, "participants", group.participants);
       return res.status(403).json({ error: "Not accepted" });
     }
     const { messages } = await getRoomChat(roomId);
@@ -1002,6 +1008,7 @@ app.post("/study-groups/:id/presence", async (req, res) => {
     const user = await requireUser(req);
     const groupId = req.params.id;
     const group = await kvGet(`study-group:${groupId}`);
+    console.log("[presence:post] user", user.id, "groupId", groupId, "group?", !!group);
     if (!group) return res.status(404).json({ error: "Group not found" });
     // Ensure participants is an array
     if (!Array.isArray(group.participants)) group.participants = [];
@@ -1011,6 +1018,7 @@ app.post("/study-groups/:id/presence", async (req, res) => {
     const participantIds = group.participants;
     const isParticipant = participantIds.includes(user.id);
     const isHost = group.hostId === user.id;
+    console.log("[presence:post] before check - participants", participantIds, "hostId", group.hostId, "applicants", group.applicants);
     
     // If not a participant and not host, check if they were just accepted
     // (they might have been removed from applicants but not yet added to participants due to timing)
@@ -1020,9 +1028,11 @@ app.post("/study-groups/:id/presence", async (req, res) => {
       if (!wasApplicant) {
         // They're not an applicant anymore, so they should have been accepted
         // Add them to participants (race condition fix)
+        console.log("[presence:post] auto-adding accepted user to participants", user.id);
         group.participants.push(user.id);
         await kvSet(`study-group:${groupId}`, group);
       } else {
+        console.log("[presence:post] still applicant; returning 403 for user", user.id);
         // Still an applicant, not accepted yet
         return res.status(403).json({ error: "Not accepted" });
       }
@@ -1030,6 +1040,7 @@ app.post("/study-groups/:id/presence", async (req, res) => {
     
     // Ensure host is always in participants
     if (!isParticipant && isHost) {
+      console.log("[presence:post] ensuring host in participants", user.id);
       group.participants = [...participantIds, user.id];
       await kvSet(`study-group:${groupId}`, group);
     }
@@ -1150,10 +1161,13 @@ app.post("/study-groups/:id/manage", async (req, res) => {
     const user = await requireUser(req);
     const groupId = req.params.id;
     const group = await kvGet(`study-group:${groupId}`);
+    console.log("[manage] host user", user.id, "groupId", groupId, "group?", !!group);
     if (!group) return res.status(404).json({ error: "Group not found" });
     if (group.hostId !== user.id) return res.status(403).json({ error: "Not authorized" });
 
     const { applicantId, action } = req.body ?? {};
+    console.log("[manage] action", action, "applicantId", applicantId);
+    console.log("[manage] before - applicants", group.applicants, "participants", group.participants);
     if (action === "accept") {
       // Ensure applicants and participants are arrays
       if (!Array.isArray(group.applicants)) group.applicants = [];
@@ -1164,6 +1178,7 @@ app.post("/study-groups/:id/manage", async (req, res) => {
         group.participants.push(applicantId);
       }
       await kvSet(`study-group:${groupId}`, group);
+      console.log("[manage] after ACCEPT - applicants", group.applicants, "participants", group.participants);
       sendToUser(String(applicantId), {
         type: "study-group:application:accepted",
         groupId: groupId,
@@ -1172,6 +1187,7 @@ app.post("/study-groups/:id/manage", async (req, res) => {
     } else if (action === "reject") {
       group.applicants = group.applicants.filter((id) => id !== applicantId);
       await kvSet(`study-group:${groupId}`, group);
+      console.log("[manage] after REJECT - applicants", group.applicants, "participants", group.participants);
       sendToUser(String(applicantId), {
         type: "study-group:application:rejected",
         groupId: groupId,

@@ -170,10 +170,13 @@ export function StudyRoomPage({
     
     const fetchGroup = async () => {
       try {
+        console.log('[StudyRoomPage] fetchGroup start', { groupId, currentUserId });
         const res = await fetch(`${apiBase}/study-groups/${groupId}`, {
           headers: auth(accessToken),
         });
+        console.log('[StudyRoomPage] fetchGroup res status', res.status);
         const data = await res.json();
+        console.log('[StudyRoomPage] fetchGroup data', data);
         if (!cancelled && data.group) {
           setGroup(data.group);
           if (!data.group.participants?.includes(currentUserId)) {
@@ -184,6 +187,10 @@ export function StudyRoomPage({
                 if (!cancelled) fetchGroup();
               }, 1000);
             } else {
+              console.log('[StudyRoomPage] user not participant after retries; blocking join', {
+                currentUserId,
+                participants: data.group.participants,
+              });
               setJoinBlocked(true);
               setLoading(false);
             }
@@ -208,10 +215,18 @@ export function StudyRoomPage({
     (async () => {
       try {
         if (joinBlocked) return;
+        console.log('[StudyRoomPage] join presence effect', {
+          groupId,
+          joinBlocked,
+          hasGroup: !!group,
+          participants: group?.participants,
+          currentUserId,
+        });
         const res = await fetch(`${apiBase}/study-groups/${groupId}/presence`, {
           method: 'POST',
           headers: { ...auth(accessToken), 'Content-Type': 'application/json' },
         });
+        console.log('[StudyRoomPage] presence POST status', res.status);
         if (!res.ok) {
           if (!cancelled && res.status === 403) {
             setJoinBlocked(true);
@@ -225,7 +240,7 @@ export function StudyRoomPage({
       }
     })();
     return () => { cancelled = true; };
-  }, [groupId, accessToken, joinBlocked]);
+  }, [groupId, accessToken, joinBlocked, group, currentUserId]);
 
   // Fetch room chat history
   useEffect(() => {
