@@ -30,6 +30,9 @@ interface Group {
   time: string;
   maxParticipants: number;
   participantsWithNames?: Participant[];
+  meetingId?: string;
+  studyType?: string;
+  duration?: string;
 }
 
 interface StudyRoomPageProps {
@@ -38,6 +41,7 @@ interface StudyRoomPageProps {
   currentUserId: string;
   onBack: () => void;
   onLeaveRoom?: () => void;
+  onJoinMeeting?: (meetingId: string) => void;
 }
 
 interface UploadedFile {
@@ -92,7 +96,8 @@ export function StudyRoomPage({
   accessToken,
   currentUserId,
   onBack,
-  onLeaveRoom
+  onLeaveRoom,
+  onJoinMeeting
 }: StudyRoomPageProps) {
   const [group, setGroup] = useState<Group | null>(null);
   const [loading, setLoading] = useState(true);
@@ -626,6 +631,16 @@ export function StudyRoomPage({
   const mapQuery = group ? encodeURIComponent(group.location) : '';
   const mapSrc = `https://www.google.com/maps?q=${mapQuery}&output=embed`;
 
+  const openZoomFloating = () => {
+    if (!group?.meetingId) return;
+    if (!onJoinMeeting) {
+      // Fallback: go to the meeting page
+      window.location.hash = `meeting-${group.meetingId}`;
+      return;
+    }
+    onJoinMeeting(group.meetingId);
+  };
+
   return (
     <div className="space-y-4">
       <div className="flex items-center gap-4">
@@ -659,18 +674,35 @@ export function StudyRoomPage({
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
         {/* Left: Map or Group Quiz */}
         {!isStudyTime ? (
-          /* Before Study Time - Show Map */
-          <div className="lg:col-span-2 rounded-lg overflow-hidden border bg-gray-100 h-[520px] min-h-[280px]">
-            <iframe
-              title="Meeting location"
-              src={mapSrc}
-              className="w-full h-full"
-              style={{ border: 0 }}
-              allowFullScreen
-              loading="lazy"
-              referrerPolicy="no-referrer-when-downgrade"
-            />
-          </div>
+          group.meetingId ? (
+            /* Online room - Zoom panel */
+            <div className="lg:col-span-2 rounded-lg overflow-hidden border bg-white h-[520px] min-h-[280px] flex flex-col">
+              <div className="flex-1 flex flex-col items-center justify-center gap-4 p-6 text-center">
+                <div className="text-5xl">🎥</div>
+                <h3 className="text-xl font-bold">Online Meeting (Zoom)</h3>
+                <p className="text-sm text-muted-foreground max-w-md">
+                  This room works like an in-person room (chat, presence, quiz). Open Zoom in a floating window inside the app.
+                </p>
+                <Button onClick={openZoomFloating} className="bg-blue-600 hover:bg-blue-700">
+                  Open Zoom
+                </Button>
+                <p className="text-xs text-muted-foreground">You can move/resize it and keep it while navigating.</p>
+              </div>
+            </div>
+          ) : (
+            /* Before Study Time - Show Map */
+            <div className="lg:col-span-2 rounded-lg overflow-hidden border bg-gray-100 h-[520px] min-h-[280px]">
+              <iframe
+                title="Meeting location"
+                src={mapSrc}
+                className="w-full h-full"
+                style={{ border: 0 }}
+                allowFullScreen
+                loading="lazy"
+                referrerPolicy="no-referrer-when-downgrade"
+              />
+            </div>
+          )
         ) : (
           /* After Study Time - Show Group Quiz */
           <div className="lg:col-span-2 rounded-lg border bg-white h-[520px] min-h-[280px] flex flex-col">
@@ -1104,6 +1136,13 @@ export function StudyRoomPage({
               <span className="text-muted-foreground">🕐</span>
               <span><strong>Time:</strong> {group.time || '—'}</span>
             </div>
+            {group.meetingId && (
+              <div className="pt-2 border-t">
+                <Button onClick={openZoomFloating} variant="outline" className="w-full">
+                  Open Zoom
+                </Button>
+              </div>
+            )}
             <div className="text-sm text-muted-foreground pt-2 border-t">
               {(group.participantsWithNames ?? []).length} / {group.maxParticipants} participants
             </div>

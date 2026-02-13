@@ -87,8 +87,18 @@ export function StudyGroupsPage({ accessToken, userId, currentUserUsername, room
   const [editForm, setEditForm] = useState(defaultGroupForm);
   const [favorites, setFavorites] = useState<Set<string>>(new Set());
   const [newGroup, setNewGroup] = useState(defaultGroupForm);
-  const [zoomForm, setZoomForm] = useState({ topic: '', durationMinutes: 60 });
   const [creatingZoom, setCreatingZoom] = useState(false);
+
+  const durationToMinutes = (duration?: string) => {
+    const d = String(duration || '').toLowerCase();
+    if (d.includes('30')) return 30;
+    if (d.includes('90')) return 90;
+    if (d.includes('1 hour')) return 60;
+    if (d.includes('2 hours')) return 120;
+    if (d.includes('3 hours')) return 180;
+    if (d.includes('4')) return 240;
+    return 60;
+  };
 
   useEffect(() => {
     fetchGroups();
@@ -158,15 +168,14 @@ export function StudyGroupsPage({ accessToken, userId, currentUserUsername, room
           Authorization: `Bearer ${accessToken}`
         },
         body: JSON.stringify({
-          topic: zoomForm.topic.trim() || 'Study Meeting',
-          durationMinutes: zoomForm.durationMinutes || 60
+          topic: newGroup.topic.trim() || 'Study Meeting',
+          durationMinutes: durationToMinutes(newGroup.duration)
         })
       });
       const meetingData = await meetingRes.json();
       if (!meetingRes.ok) throw new Error(meetingData.error || 'Failed to create Zoom meeting');
       const meetingId = meetingData.meeting?.meetingId ?? meetingData.meetingId;
-        const topic = meetingData.meeting?.topic ?? (zoomForm.topic.trim() || 'Zoom Study Room');
-      const today = new Date().toISOString().slice(0, 10);
+      const topic = meetingData.meeting?.topic ?? (newGroup.topic.trim() || 'Zoom Study Room');
       const groupRes = await fetch(`${apiBase}/study-groups`, {
         method: 'POST',
         headers: {
@@ -174,24 +183,22 @@ export function StudyGroupsPage({ accessToken, userId, currentUserUsername, room
           Authorization: `Bearer ${accessToken}`
         },
         body: JSON.stringify({
+          ...newGroup,
           topic,
           studyType: 'Online',
           meetingId,
           location: 'Online (Zoom)',
-          date: today,
-          time: '00:00',
-          maxParticipants: 50,
-          duration: '2 hours'
         })
       });
       const groupData = await groupRes.json();
       if (!groupRes.ok) throw new Error(groupData.error || 'Failed to create room');
       if (groupData.group) {
         setGroups([...groups, { ...groupData.group, hostUsername: currentUserUsername ?? groupData.group.hostUsername }]);
-        setZoomForm({ topic: '', durationMinutes: 60 });
         setCreateStep('choice');
         setIsCreateDialogOpen(false);
-        toast.success('Zoom room created. Entering the room…');
+        setNewGroup(defaultGroupForm);
+        toast.success('Zoom room created. Opening Zoom…');
+        onJoinRoom(groupData.group.id);
         onJoinMeeting?.(meetingId);
       }
     } catch (e) {
@@ -391,7 +398,7 @@ export function StudyGroupsPage({ accessToken, userId, currentUserUsername, room
                       type="button"
                       variant="outline"
                       className="h-auto py-6 flex flex-col gap-2 border-2 border-purple-200 hover:bg-purple-50 hover:border-purple-400"
-                      onClick={() => setCreateStep('in-person')}
+                      onClick={() => { setCreateStep('in-person'); setNewGroup(defaultGroupForm); }}
                     >
                       <MapPin className="size-8 text-purple-500" />
                       <span className="font-semibold">In-person meeting</span>
@@ -401,7 +408,7 @@ export function StudyGroupsPage({ accessToken, userId, currentUserUsername, room
                       type="button"
                       variant="outline"
                       className="h-auto py-6 flex flex-col gap-2 border-2 border-blue-200 hover:bg-blue-50 hover:border-blue-400"
-                      onClick={() => setCreateStep('online')}
+                      onClick={() => { setCreateStep('online'); setNewGroup({ ...defaultGroupForm, studyType: 'Online', location: 'Online (Zoom)' }); }}
                     >
                       <Monitor className="size-8 text-blue-500" />
                       <span className="font-semibold">Online meeting (Zoom)</span>
@@ -511,33 +518,65 @@ export function StudyGroupsPage({ accessToken, userId, currentUserUsername, room
               {createStep === 'online' && (
                 <>
                   <Button variant="ghost" size="sm" className="mb-2 -ml-2" onClick={() => setCreateStep('choice')}>← Back</Button>
-                  <p className="text-xs text-gray-500">Create a Zoom meeting from our site. It will appear in the study group list and you can share the link.</p>
+                  <p className="text-xs text-gray-500">Create a normal room first (same as in-person), then open Zoom as a floating window inside the app.</p>
                   <div className="space-y-2">
-                    <Label>Topic (optional)</Label>
+                    <Label>Topic / Subject</Label>
                     <Input
-                      placeholder="e.g. Calculus Study"
-                      value={zoomForm.topic}
-                      onChange={(e) => setZoomForm({ ...zoomForm, topic: e.target.value })}
+                      placeholder="Calculus Study Session 🔢"
+                      value={newGroup.topic}
+                      onChange={(e) => setNewGroup({ ...newGroup, topic: e.target.value })}
                       className="border-blue-200"
                     />
                   </div>
-                  <div className="space-y-2">
-                    <Label>Duration (minutes)</Label>
-                    <Select
-                      value={String(zoomForm.durationMinutes)}
-                      onValueChange={(v) => setZoomForm({ ...zoomForm, durationMinutes: Number(v) })}
-                    >
-                      <SelectTrigger className="border-blue-200">
-                        <SelectValue />
-                      </SelectTrigger>
-                      <SelectContent>
-                        <SelectItem value="30">30 min</SelectItem>
-                        <SelectItem value="60">1 hour</SelectItem>
-                        <SelectItem value="90">1.5 hours</SelectItem>
-                        <SelectItem value="120">2 hours</SelectItem>
-                        <SelectItem value="180">3 hours</SelectItem>
-                      </SelectContent>
-                    </Select>
+                  <div className="grid grid-cols-2 gap-4">
+                    <div className="space-y-2">
+                      <Label>Date</Label>
+                      <Input
+                        type="date"
+                        value={newGroup.date}
+                        onChange={(e) => setNewGroup({ ...newGroup, date: e.target.value })}
+                        className="border-blue-200"
+                      />
+                    </div>
+                    <div className="space-y-2">
+                      <Label>Time</Label>
+                      <Input
+                        type="time"
+                        value={newGroup.time}
+                        onChange={(e) => setNewGroup({ ...newGroup, time: e.target.value })}
+                        className="border-blue-200"
+                      />
+                    </div>
+                  </div>
+                  <div className="grid grid-cols-2 gap-4">
+                    <div className="space-y-2">
+                      <Label>Duration</Label>
+                      <Select
+                        value={newGroup.duration}
+                        onValueChange={(value) => setNewGroup({ ...newGroup, duration: value })}
+                      >
+                        <SelectTrigger className="border-blue-200">
+                          <SelectValue />
+                        </SelectTrigger>
+                        <SelectContent>
+                          <SelectItem value="1 hour">1 hour</SelectItem>
+                          <SelectItem value="2 hours">2 hours</SelectItem>
+                          <SelectItem value="3 hours">3 hours</SelectItem>
+                          <SelectItem value="4+ hours">4+ hours</SelectItem>
+                        </SelectContent>
+                      </Select>
+                    </div>
+                    <div className="space-y-2">
+                      <Label>Max Participants</Label>
+                      <Input
+                        type="number"
+                        min="2"
+                        max="50"
+                        value={newGroup.maxParticipants}
+                        onChange={(e) => setNewGroup({ ...newGroup, maxParticipants: parseInt(e.target.value) || 10 })}
+                        className="border-blue-200"
+                      />
+                    </div>
                   </div>
                   <Button
                     onClick={handleCreateZoomRoom}
@@ -777,25 +816,33 @@ export function StudyGroupsPage({ accessToken, userId, currentUserUsername, room
                     </div>
                   )}
 
-                  {/* Action button: Zoom room → Join meeting; in-person → Join room */}
-                  {group.meetingId && onJoinMeeting && (
-                    <Button
-                      className="w-full bg-blue-600 text-white hover:bg-blue-700 font-semibold"
-                      onClick={() => onJoinMeeting(group.meetingId!)}
-                    >
-                      <Video className="size-4 mr-2" />
-                      Join Zoom meeting
-                    </Button>
-                  )}
-                  {!group.meetingId && (isHost || isMember) && (
+                  {/* Action buttons */}
+                  {group.meetingId && (isHost || isMember) ? (
+                    <div className="grid grid-cols-2 gap-2">
+                      <Button
+                        className="w-full bg-teal-600 text-white hover:bg-teal-700 font-semibold"
+                        onClick={() => onJoinRoom(group.id)}
+                      >
+                        <Video className="size-4 mr-2" />
+                        Enter room
+                      </Button>
+                      <Button
+                        className="w-full bg-blue-600 text-white hover:bg-blue-700 font-semibold"
+                        onClick={() => group.meetingId && onJoinMeeting?.(group.meetingId)}
+                      >
+                        <Video className="size-4 mr-2" />
+                        Open Zoom
+                      </Button>
+                    </div>
+                  ) : !group.meetingId && (isHost || isMember) ? (
                     <Button
                       className="w-full bg-teal-600 text-white hover:bg-teal-700 font-semibold"
                       onClick={() => onJoinRoom(group.id)}
                     >
                       <Video className="size-4 mr-2" />
-                      Join
+                      Enter room
                     </Button>
-                  )}
+                  ) : null}
 
                   {!isHost && !isMember && (
                     <Button
