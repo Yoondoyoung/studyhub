@@ -957,28 +957,15 @@ app.get("/study-groups/:id/presence", async (req, res) => {
     const user = await requireUser(req);
     const groupId = req.params.id;
     const group = await kvGet(`study-group:${groupId}`);
-    console.log("[presence:get] user", user.id, "groupId", groupId, "group?", !!group);
     if (!group) return res.status(404).json({ error: "Group not found" });
     // Ensure participants is an array
     if (!Array.isArray(group.participants)) group.participants = [];
-    console.log("[presence:get] participants", group.participants, "hostId", group.hostId);
-    const presence = (await kvGet(`room-presence:${groupId}`)) || { users: [] };
-    const isInPresence = Array.isArray(presence.users)
-      ? presence.users.some((u) => u && u.id === user.id)
-      : false;
     const isParticipant = group.participants.includes(user.id);
     const isHost = group.hostId === user.id;
-    if (!isParticipant && !isHost && !isInPresence) {
-      console.log(
-        "[presence:get] 403 Not accepted for user",
-        user.id,
-        "participants",
-        group.participants,
-        "presenceUsers",
-        presence.users?.map((u) => u.id)
-      );
+    if (!isParticipant && !isHost) {
       return res.status(403).json({ error: "Not accepted" });
     }
+    const presence = (await kvGet(`room-presence:${groupId}`)) || { users: [] };
     return res.json({ presence: presence.users });
   } catch (err) {
     if (String(err?.message).includes("Unauthorized"))
@@ -1018,41 +1005,15 @@ app.post("/study-groups/:id/presence", async (req, res) => {
     const user = await requireUser(req);
     const groupId = req.params.id;
     const group = await kvGet(`study-group:${groupId}`);
-    console.log("[presence:post] user", user.id, "groupId", groupId, "group?", !!group);
     if (!group) return res.status(404).json({ error: "Group not found" });
     // Ensure participants is an array
     if (!Array.isArray(group.participants)) group.participants = [];
-    // Ensure applicants is an array
-    if (!Array.isArray(group.applicants)) group.applicants = [];
     
     const participantIds = group.participants;
     const isParticipant = participantIds.includes(user.id);
     const isHost = group.hostId === user.id;
-    console.log("[presence:post] before check - participants", participantIds, "hostId", group.hostId, "applicants", group.applicants);
-    
-    // If not a participant and not host, check if they were just accepted
-    // (they might have been removed from applicants but not yet added to participants due to timing)
     if (!isParticipant && !isHost) {
-      // Check if they're in applicants (shouldn't be after accept, but check anyway)
-      const wasApplicant = group.applicants.includes(user.id);
-      if (!wasApplicant) {
-        // They're not an applicant anymore, so they should have been accepted
-        // Add them to participants (race condition fix)
-        console.log("[presence:post] auto-adding accepted user to participants", user.id);
-        group.participants.push(user.id);
-        await kvSet(`study-group:${groupId}`, group);
-      } else {
-        console.log("[presence:post] still applicant; returning 403 for user", user.id);
-        // Still an applicant, not accepted yet
-        return res.status(403).json({ error: "Not accepted" });
-      }
-    }
-    
-    // Ensure host is always in participants
-    if (!isParticipant && isHost) {
-      console.log("[presence:post] ensuring host in participants", user.id);
-      group.participants = [...participantIds, user.id];
-      await kvSet(`study-group:${groupId}`, group);
+      return res.status(403).json({ error: "Not accepted" });
     }
     const profile = await kvGet(`user:${user.id}`);
     const username = profile?.username ?? profile?.email ?? user.id?.slice(0, 8) ?? "User";
@@ -1079,20 +1040,9 @@ app.post("/study-groups/:id/presence", async (req, res) => {
   }
 });
 
-const NO_SHOW_MINUTES = 15;
-
-function applyNoShowCleanup(group) {
-  if (!group || !group.date || !group.participants?.length) return false;
-  const meetingStart = new Date(`${group.date}T${group.time || "00:00"}`);
-  const cutoff = new Date(meetingStart.getTime() + NO_SHOW_MINUTES * 60 * 1000);
-  if (new Date() < cutoff) return false;
-  const firstJoin = group.participantFirstJoinAt || {};
-  const before = group.participants.length;
-  // Always keep host in participants so room ownership does not get invalidated.
-  group.participants = group.participants.filter(
-    (id) => id === group.hostId || firstJoin[id] != null
-  );
-  return group.participants.length !== before;
+// No-show cleanup disabled for now to keep membership logic simple.
+function applyNoShowCleanup(_group) {
+  return false;
 }
 
 app.delete("/study-groups/:id/presence", async (req, res) => {
@@ -1102,11 +1052,6 @@ app.delete("/study-groups/:id/presence", async (req, res) => {
     let presence = (await kvGet(`room-presence:${groupId}`)) || { users: [] };
     presence.users = (presence.users || []).filter((u) => u.id !== user.id);
     await kvSet(`room-presence:${groupId}`, presence);
-    const group = await kvGet(`study-group:${groupId}`);
-    if (group && Array.isArray(group.participants)) {
-      group.participants = group.participants.filter((id) => id !== user.id);
-      await kvSet(`study-group:${groupId}`, group);
-    }
     return res.json({ presence: presence.users });
   } catch (err) {
     if (String(err?.message).includes("Unauthorized"))
