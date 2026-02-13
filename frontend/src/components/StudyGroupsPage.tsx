@@ -100,12 +100,12 @@ export function StudyGroupsPage({ accessToken, userId, currentUserUsername, room
 
   useEffect(() => {
     fetchGroups();
-    
+
     // Poll for updates every 5 seconds to keep group list fresh
     const interval = setInterval(() => {
       fetchGroups();
     }, 5000);
-    
+
     return () => clearInterval(interval);
   }, []);
 
@@ -122,7 +122,7 @@ export function StudyGroupsPage({ accessToken, userId, currentUserUsername, room
     try {
       const response = await fetch(`${apiBase}/study-groups`);
       const data = await response.json();
-      
+
       // Keep sample data and add fetched groups
       const sampleGroups = [
         {
@@ -154,10 +154,10 @@ export function StudyGroupsPage({ accessToken, userId, currentUserUsername, room
           duration: '2 hours'
         }
       ];
-      
+
       const fetchedGroups = data.groups || [];
       const newGroups = [...sampleGroups, ...fetchedGroups];
-      
+
       // Notifications are now handled globally in App.tsx
       setGroups(newGroups);
     } catch (error) {
@@ -229,7 +229,7 @@ export function StudyGroupsPage({ accessToken, userId, currentUserUsername, room
         body: JSON.stringify(newGroup)
       });
       const data = await response.json();
-      
+
       if (data.group) {
         setGroups([...groups, { ...data.group, hostUsername: currentUserUsername ?? data.group.hostUsername }]);
         setNewGroup(defaultGroupForm);
@@ -304,7 +304,7 @@ export function StudyGroupsPage({ accessToken, userId, currentUserUsername, room
         }
       });
       const data = await response.json();
-      
+
       if (data.success) {
         fetchGroups();
         toast.success('✨ Application submitted!');
@@ -328,7 +328,7 @@ export function StudyGroupsPage({ accessToken, userId, currentUserUsername, room
         body: JSON.stringify({ applicantId, action })
       });
       const data = await response.json();
-      
+
       if (data.success) {
         fetchGroups();
         toast.success(action === 'accept' ? '✅ Applicant accepted' : '❌ Applicant rejected');
@@ -381,7 +381,8 @@ export function StudyGroupsPage({ accessToken, userId, currentUserUsername, room
   );
 
   const formatDate = (dateStr: string) => {
-    const date = new Date(dateStr);
+    // Append T00:00:00 so JS parses as local time, not UTC (avoids off-by-one day)
+    const date = new Date(dateStr.includes('T') ? dateStr : `${dateStr}T00:00:00`);
     return date.toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
   };
 
@@ -397,159 +398,159 @@ export function StudyGroupsPage({ accessToken, userId, currentUserUsername, room
             </Card>
           ) : (
             pagedGroups.map((group, index) => {
-            const isHost = group.hostId === userId;
-            const isInThisRoom = roomUserIsIn === group.id;
-            // Treat user as member if they are in the participants list OR
-            // if the app knows they're currently in this room (badge case).
-            const isMember = isInThisRoom || (group.participants ?? []).includes(userId);
-            const hasApplied = (group.applicants ?? []).includes(userId);
-            const isFull = (group.participants?.length ?? 0) >= (group.maxParticipants ?? 10);
+              const isHost = group.hostId === userId;
+              const isInThisRoom = roomUserIsIn === group.id;
+              // Treat user as member if they are in the participants list OR
+              // if the app knows they're currently in this room (badge case).
+              const isMember = isInThisRoom || (group.participants ?? []).includes(userId);
+              const hasApplied = (group.applicants ?? []).includes(userId);
+              const isFull = (group.participants?.length ?? 0) >= (group.maxParticipants ?? 10);
 
               return (
-                <Card 
-                  key={group.id} 
+                <Card
+                  key={group.id}
                   className="overflow-hidden rounded-2xl border border-white/70 bg-white/80 backdrop-blur shadow-[0_16px_40px_rgba(15,23,42,0.10)] transition-all hover:-translate-y-0.5 hover:shadow-[0_24px_70px_rgba(15,23,42,0.14)]"
                 >
-                <CardContent className="p-4">
-                  <div className="flex flex-col gap-3 sm:flex-row sm:items-stretch sm:justify-between sm:gap-6">
-                    <div className="min-w-0 flex-1">
-                      <div className="flex items-start justify-between gap-3">
-                        <div className="min-w-0">
-                          <h3 className="font-bold text-lg text-gray-900 truncate">{group.topic}</h3>
-                          <p className="text-xs text-gray-600 mt-0.5">
-                            Host: {group.hostUsername ?? group.hostId?.slice(0, 8) ?? '—'}
-                          </p>
-                          <div className="mt-2 flex flex-wrap gap-2">
-                            {isHost && (
-                              <Badge className="bg-gradient-to-r from-purple-500 to-pink-500 text-white border-0">
-                                Your Room
+                  <CardContent className="p-4">
+                    <div className="flex flex-col gap-3 sm:flex-row sm:items-stretch sm:justify-between sm:gap-6">
+                      <div className="min-w-0 flex-1">
+                        <div className="flex items-start justify-between gap-3">
+                          <div className="min-w-0">
+                            <h3 className="font-bold text-lg text-gray-900 truncate">{group.topic}</h3>
+                            <p className="text-xs text-gray-600 mt-0.5">
+                              Host: {group.hostUsername ?? group.hostId?.slice(0, 8) ?? '—'}
+                            </p>
+                            <div className="mt-2 flex flex-wrap gap-2">
+                              {isHost && (
+                                <Badge className="bg-gradient-to-r from-purple-500 to-pink-500 text-white border-0">
+                                  Your Room
+                                </Badge>
+                              )}
+                              {roomUserIsIn === group.id && !isHost && (
+                                <Badge className="bg-black text-white border-0">
+                                  You&apos;re in this room
+                                </Badge>
+                              )}
+                              <Badge variant="secondary" className="bg-gray-100/80 text-gray-700 font-medium">
+                                {group.studyType || 'In-person'}
                               </Badge>
-                            )}
-                            {roomUserIsIn === group.id && !isHost && (
-                              <Badge className="bg-black text-white border-0">
-                                You&apos;re in this room
+                              <Badge variant="secondary" className="bg-gray-100/80 text-gray-700 font-medium">
+                                {group.duration || '2 hours'}
                               </Badge>
-                            )}
-                            <Badge variant="secondary" className="bg-gray-100/80 text-gray-700 font-medium">
-                              {group.studyType || 'In-person'}
-                            </Badge>
-                            <Badge variant="secondary" className="bg-gray-100/80 text-gray-700 font-medium">
-                              {group.duration || '2 hours'}
-                            </Badge>
-                            <Badge variant="secondary" className="bg-gray-100/80 text-gray-700 font-medium">
-                              {group.participants?.length ?? 0}/{group.maxParticipants ?? 10} seats
-                            </Badge>
+                              <Badge variant="secondary" className="bg-gray-100/80 text-gray-700 font-medium">
+                                {group.participants?.length ?? 0}/{group.maxParticipants ?? 10} seats
+                              </Badge>
+                            </div>
+                          </div>
+                        </div>
+
+                        <div className="mt-3 flex flex-col gap-2 text-sm text-gray-700">
+                          <div className="flex items-center gap-2 min-w-0">
+                            <MapPin className="size-4 flex-shrink-0 text-gray-400" />
+                            <span className="font-medium truncate">{group.location}</span>
+                          </div>
+                          <div className="flex items-center gap-2">
+                            <Clock className="size-4 flex-shrink-0 text-gray-400" />
+                            <span className="font-medium">
+                              {formatDate(group.date ?? '')} {group.time ? `• ${group.time}` : ''} • {(group.applicants?.length ?? 0) + (group.participants?.length ?? 0)} applicants
+                            </span>
                           </div>
                         </div>
                       </div>
 
-                      <div className="mt-3 flex flex-col gap-2 text-sm text-gray-700">
-                        <div className="flex items-center gap-2 min-w-0">
-                          <MapPin className="size-4 flex-shrink-0 text-gray-400" />
-                          <span className="font-medium truncate">{group.location}</span>
-                        </div>
-                        <div className="flex items-center gap-2">
-                          <Clock className="size-4 flex-shrink-0 text-gray-400" />
-                          <span className="font-medium">
-                            {formatDate(group.date ?? '')} {group.time ? `• ${group.time}` : ''} • {(group.applicants?.length ?? 0) + (group.participants?.length ?? 0)} applicants
-                          </span>
-                        </div>
-                      </div>
-                    </div>
-
-                    <div className="shrink-0 w-full sm:w-[240px] flex flex-col gap-2 sm:self-stretch sm:justify-center">
-                      {group.meetingId && (isHost || isMember) ? (
-                        <div className="grid grid-cols-2 gap-2">
+                      <div className="shrink-0 w-full sm:w-[240px] flex flex-col gap-2 sm:self-stretch sm:justify-center">
+                        {group.meetingId && (isHost || isMember) ? (
+                          <div className="grid grid-cols-2 gap-2">
+                            <Button className="w-full font-semibold" onClick={() => onJoinRoom(group.id)}>
+                              <Video className="size-4 mr-2" />
+                              Enter
+                            </Button>
+                            <Button
+                              variant="outline"
+                              className="w-full font-semibold border-gray-200 bg-white/70 hover:bg-gray-50"
+                              onClick={() => group.meetingId && onJoinMeeting?.(group.meetingId)}
+                            >
+                              <Video className="size-4 mr-2" />
+                              Zoom
+                            </Button>
+                          </div>
+                        ) : !group.meetingId && (isHost || isMember) ? (
                           <Button className="w-full font-semibold" onClick={() => onJoinRoom(group.id)}>
-                            <Video className="size-4 mr-2" />
-                            Enter
+                            <DoorOpen className="size-4 mr-2" />
+                            Enter room
                           </Button>
-                          <Button
-                            variant="outline"
-                            className="w-full font-semibold border-gray-200 bg-white/70 hover:bg-gray-50"
-                            onClick={() => group.meetingId && onJoinMeeting?.(group.meetingId)}
-                          >
-                            <Video className="size-4 mr-2" />
-                            Zoom
-                          </Button>
-                        </div>
-                      ) : !group.meetingId && (isHost || isMember) ? (
-                        <Button className="w-full font-semibold" onClick={() => onJoinRoom(group.id)}>
-                          <DoorOpen className="size-4 mr-2" />
-                          Enter room
-                        </Button>
-                      ) : null}
+                        ) : null}
 
-                      {!isHost && !isMember && (
-                        <Button className="w-full font-semibold" disabled={hasApplied || isFull} onClick={() => handleApply(group.id)}>
-                          {hasApplied ? '⏳ Pending' : isFull ? '🔒 Full' : 'Apply Now'}
-                        </Button>
-                      )}
-
-                      {isHost && (
-                        <div className="grid grid-cols-2 gap-2">
-                          <Button
-                            variant="outline"
-                            size="sm"
-                            className="border-gray-200 bg-white/60 hover:bg-gray-50 text-gray-700"
-                            onClick={() => openEditDialog(group)}
-                          >
-                            <Pencil className="size-4 mr-2" />
-                            Edit
+                        {!isHost && !isMember && (
+                          <Button className="w-full font-semibold" disabled={hasApplied || isFull} onClick={() => handleApply(group.id)}>
+                            {hasApplied ? '⏳ Pending' : isFull ? '🔒 Full' : 'Apply Now'}
                           </Button>
-                          <Button
-                            variant="outline"
-                            size="sm"
-                            className="border-red-200 text-red-600 hover:bg-red-50 hover:text-red-700"
-                            onClick={() => handleDeleteGroup(group.id)}
-                          >
-                            <Trash2 className="size-4 mr-2" />
-                            Delete
-                          </Button>
-                        </div>
-                      )}
-                    </div>
-                  </div>
+                        )}
 
-                  {isHost && (group.applicants?.length ?? 0) > 0 && (
-                    <details className="mt-4 border-t border-gray-200/60 pt-3">
-                      <summary className="cursor-pointer select-none text-sm font-semibold text-gray-900">
-                        Pending Requests ({group.applicants?.length ?? 0})
-                      </summary>
-                      <div className="mt-3 space-y-2">
-                        {(group.applicants ?? []).slice(0, 5).map((applicantId) => {
-                          const applicantInfo = group.applicantsWithNames?.find((item) => item.id === applicantId);
-                          return (
-                            <div key={applicantId} className="flex items-center justify-between bg-white/60 rounded-lg p-2">
-                              <span className="text-sm text-gray-700 truncate">
-                                {applicantInfo?.username || `User ${applicantId.slice(0, 8)}...`}
-                              </span>
-                              <div className="flex gap-1 shrink-0">
-                                <Button
-                                  size="sm"
-                                  variant="ghost"
-                                  className="h-8 w-8 p-0 hover:bg-green-100"
-                                  onClick={() => handleManageApplicant(group.id, applicantId, 'accept')}
-                                >
-                                  <CheckCircle2 className="size-4 text-green-600" />
-                                </Button>
-                                <Button
-                                  size="sm"
-                                  variant="ghost"
-                                  className="h-8 w-8 p-0 hover:bg-red-100"
-                                  onClick={() => handleManageApplicant(group.id, applicantId, 'reject')}
-                                >
-                                  <XCircle className="size-4 text-red-600" />
-                                </Button>
-                              </div>
-                            </div>
-                          );
-                        })}
+                        {isHost && (
+                          <div className="grid grid-cols-2 gap-2">
+                            <Button
+                              variant="outline"
+                              size="sm"
+                              className="border-gray-200 bg-white/60 hover:bg-gray-50 text-gray-700"
+                              onClick={() => openEditDialog(group)}
+                            >
+                              <Pencil className="size-4 mr-2" />
+                              Edit
+                            </Button>
+                            <Button
+                              variant="outline"
+                              size="sm"
+                              className="border-red-200 text-red-600 hover:bg-red-50 hover:text-red-700"
+                              onClick={() => handleDeleteGroup(group.id)}
+                            >
+                              <Trash2 className="size-4 mr-2" />
+                              Delete
+                            </Button>
+                          </div>
+                        )}
                       </div>
-                    </details>
-                  )}
-                </CardContent>
-              </Card>
+                    </div>
+
+                    {isHost && (group.applicants?.length ?? 0) > 0 && (
+                      <details className="mt-4 border-t border-gray-200/60 pt-3">
+                        <summary className="cursor-pointer select-none text-sm font-semibold text-gray-900">
+                          Pending Requests ({group.applicants?.length ?? 0})
+                        </summary>
+                        <div className="mt-3 space-y-2">
+                          {(group.applicants ?? []).slice(0, 5).map((applicantId) => {
+                            const applicantInfo = group.applicantsWithNames?.find((item) => item.id === applicantId);
+                            return (
+                              <div key={applicantId} className="flex items-center justify-between bg-white/60 rounded-lg p-2">
+                                <span className="text-sm text-gray-700 truncate">
+                                  {applicantInfo?.username || `User ${applicantId.slice(0, 8)}...`}
+                                </span>
+                                <div className="flex gap-1 shrink-0">
+                                  <Button
+                                    size="sm"
+                                    variant="ghost"
+                                    className="h-8 w-8 p-0 hover:bg-green-100"
+                                    onClick={() => handleManageApplicant(group.id, applicantId, 'accept')}
+                                  >
+                                    <CheckCircle2 className="size-4 text-green-600" />
+                                  </Button>
+                                  <Button
+                                    size="sm"
+                                    variant="ghost"
+                                    className="h-8 w-8 p-0 hover:bg-red-100"
+                                    onClick={() => handleManageApplicant(group.id, applicantId, 'reject')}
+                                  >
+                                    <XCircle className="size-4 text-red-600" />
+                                  </Button>
+                                </div>
+                              </div>
+                            );
+                          })}
+                        </div>
+                      </details>
+                    )}
+                  </CardContent>
+                </Card>
               );
             })
           )}
@@ -586,193 +587,125 @@ export function StudyGroupsPage({ accessToken, userId, currentUserUsername, room
       {/* Create button floats above container without pushing it down */}
       <div className="absolute right-0 top-0 -translate-y-12 z-10">
         <Dialog open={isCreateDialogOpen} onOpenChange={(open) => { setIsCreateDialogOpen(open); if (!open) setCreateStep('choice'); }}>
-        <DialogTrigger asChild>
-          <Button>
-            <Plus className="size-4 mr-2" />
-            Create Room
-          </Button>
-        </DialogTrigger>
-        <DialogContent className="bg-gradient-to-br from-white to-purple-50">
-          <DialogHeader>
-            <DialogTitle className="text-2xl">
-              {createStep === 'choice' && 'Create Study Room ✨'}
-              {createStep === 'in-person' && 'In-person meeting'}
-              {createStep === 'online' && 'Online meeting (Zoom)'}
-            </DialogTitle>
-          </DialogHeader>
-          <div className="space-y-4">
-            {createStep === 'choice' && (
-              <>
-                <p className="text-sm text-gray-600">Choose how you want to meet.</p>
-                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-                  <Button
-                    type="button"
-                    variant="outline"
-                    className="h-auto py-6 flex flex-col gap-2 border-2 border-purple-200 hover:bg-purple-50 hover:border-purple-400"
-                    onClick={() => { setCreateStep('in-person'); setNewGroup(defaultGroupForm); }}
-                  >
-                    <MapPin className="size-8 text-purple-500" />
-                    <span className="font-semibold">In-person meeting</span>
-                    <span className="text-xs text-gray-500 font-normal">Create a room with location & time</span>
-                  </Button>
-                  <Button
-                    type="button"
-                    variant="outline"
-                    className="h-auto py-6 flex flex-col gap-2 border-2 border-blue-200 hover:bg-blue-50 hover:border-blue-400"
-                    onClick={() => { setCreateStep('online'); setNewGroup({ ...defaultGroupForm, studyType: 'Online', location: 'Online (Zoom)' }); }}
-                  >
-                    <Monitor className="size-8 text-blue-500" />
-                    <span className="font-semibold">Online meeting (Zoom)</span>
-                    <span className="text-xs text-gray-500 font-normal">Create a Zoom room (appears in list)</span>
-                  </Button>
-                </div>
-                <Button variant="ghost" className="w-full" onClick={() => setIsCreateDialogOpen(false)}>Cancel</Button>
-              </>
-            )}
+          <DialogTrigger asChild>
+            <Button>
+              <Plus className="size-4 mr-2" />
+              Create Room
+            </Button>
+          </DialogTrigger>
+          <DialogContent className="bg-gradient-to-br from-white to-purple-50">
+            <DialogHeader>
+              <DialogTitle className="text-2xl">
+                {createStep === 'choice' && 'Create Study Room ✨'}
+                {createStep === 'in-person' && 'In-person meeting'}
+                {createStep === 'online' && 'Online meeting (Zoom)'}
+              </DialogTitle>
+            </DialogHeader>
+            <div className="space-y-4">
+              {createStep === 'choice' && (
+                <>
+                  <p className="text-sm text-gray-600">Choose how you want to meet.</p>
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                    <Button
+                      type="button"
+                      variant="outline"
+                      className="h-auto py-6 flex flex-col gap-2 border-2 border-purple-200 hover:bg-purple-50 hover:border-purple-400"
+                      onClick={() => { setCreateStep('in-person'); setNewGroup(defaultGroupForm); }}
+                    >
+                      <MapPin className="size-8 text-purple-500" />
+                      <span className="font-semibold">In-person meeting</span>
+                      <span className="text-xs text-gray-500 font-normal">Create a room with location & time</span>
+                    </Button>
+                    <Button
+                      type="button"
+                      variant="outline"
+                      className="h-auto py-6 flex flex-col gap-2 border-2 border-blue-200 hover:bg-blue-50 hover:border-blue-400"
+                      onClick={() => { setCreateStep('online'); setNewGroup({ ...defaultGroupForm, studyType: 'Online', location: 'Online (Zoom)' }); }}
+                    >
+                      <Monitor className="size-8 text-blue-500" />
+                      <span className="font-semibold">Online meeting (Zoom)</span>
+                      <span className="text-xs text-gray-500 font-normal">Create a Zoom room (appears in list)</span>
+                    </Button>
+                  </div>
+                  <Button variant="ghost" className="w-full" onClick={() => setIsCreateDialogOpen(false)}>Cancel</Button>
+                </>
+              )}
 
-            {createStep === 'in-person' && (
-              <>
-                <Button variant="ghost" size="sm" className="mb-2 -ml-2" onClick={() => setCreateStep('choice')}>← Back</Button>
-                <div className="space-y-2">
-                  <Label>Topic / Subject</Label>
-                  <Input
-                    placeholder="Calculus Study Session 🔢"
-                    value={newGroup.topic}
-                    onChange={(e) => setNewGroup({ ...newGroup, topic: e.target.value })}
-                    className="border-purple-200"
-                  />
-                </div>
-                <div className="space-y-2">
-                  <Label>Location</Label>
-                  <Input
-                    placeholder="Main Library, 3rd Floor 📍"
-                    value={newGroup.location}
-                    onChange={(e) => setNewGroup({ ...newGroup, location: e.target.value })}
-                    className="border-purple-200"
-                  />
-                </div>
-                <div className="grid grid-cols-2 gap-4">
+              {createStep === 'in-person' && (
+                <>
+                  <Button variant="ghost" size="sm" className="mb-2 -ml-2" onClick={() => setCreateStep('choice')}>← Back</Button>
                   <div className="space-y-2">
-                    <Label>Date</Label>
+                    <Label>Topic / Subject</Label>
                     <Input
-                      type="date"
-                      value={newGroup.date}
-                      onChange={(e) => setNewGroup({ ...newGroup, date: e.target.value })}
+                      placeholder="Calculus Study Session 🔢"
+                      value={newGroup.topic}
+                      onChange={(e) => setNewGroup({ ...newGroup, topic: e.target.value })}
                       className="border-purple-200"
                     />
                   </div>
                   <div className="space-y-2">
-                    <Label>Time</Label>
+                    <Label>Location</Label>
                     <Input
-                      type="time"
-                      value={newGroup.time}
-                      onChange={(e) => setNewGroup({ ...newGroup, time: e.target.value })}
+                      placeholder="Main Library, 3rd Floor 📍"
+                      value={newGroup.location}
+                      onChange={(e) => setNewGroup({ ...newGroup, location: e.target.value })}
                       className="border-purple-200"
                     />
                   </div>
-                </div>
-                <div className="grid grid-cols-2 gap-4">
-                  <div className="space-y-2">
-                    <Label>Study Type</Label>
-                    <Select
-                      value={newGroup.studyType}
-                      onValueChange={(value) => setNewGroup({ ...newGroup, studyType: value })}
-                    >
-                      <SelectTrigger>
-                        <SelectValue />
-                      </SelectTrigger>
-                      <SelectContent>
-                        <SelectItem value="In-person">In-person</SelectItem>
-                        <SelectItem value="Online">Online</SelectItem>
-                        <SelectItem value="Hybrid">Hybrid</SelectItem>
-                      </SelectContent>
-                    </Select>
+                  <div className="grid grid-cols-2 gap-4">
+                    <div className="space-y-2">
+                      <Label>Date</Label>
+                      <Input
+                        type="date"
+                        value={newGroup.date}
+                        onChange={(e) => setNewGroup({ ...newGroup, date: e.target.value })}
+                        className="border-purple-200"
+                      />
+                    </div>
+                    <div className="space-y-2">
+                      <Label>Time</Label>
+                      <Input
+                        type="time"
+                        value={newGroup.time}
+                        onChange={(e) => setNewGroup({ ...newGroup, time: e.target.value })}
+                        className="border-purple-200"
+                      />
+                    </div>
                   </div>
-                  <div className="space-y-2">
-                    <Label>Duration</Label>
-                    <Select
-                      value={newGroup.duration}
-                      onValueChange={(value) => setNewGroup({ ...newGroup, duration: value })}
-                    >
-                      <SelectTrigger>
-                        <SelectValue />
-                      </SelectTrigger>
-                      <SelectContent>
-                        <SelectItem value="1 hour">1 hour</SelectItem>
-                        <SelectItem value="2 hours">2 hours</SelectItem>
-                        <SelectItem value="3 hours">3 hours</SelectItem>
-                        <SelectItem value="4+ hours">4+ hours</SelectItem>
-                      </SelectContent>
-                    </Select>
-                  </div>
-                </div>
-                <div className="space-y-2">
-                  <Label>Max Participants</Label>
-                  <Input
-                    type="number"
-                    min="2"
-                    max="50"
-                    value={newGroup.maxParticipants}
-                    onChange={(e) => setNewGroup({ ...newGroup, maxParticipants: parseInt(e.target.value) || 10 })}
-                    className="border-purple-200"
-                  />
-                </div>
-                <Button onClick={handleCreateGroup} className="w-full">
-                  Create Study Group
-                </Button>
-              </>
-            )}
-
-            {createStep === 'online' && (
-              <>
-                <Button variant="ghost" size="sm" className="mb-2 -ml-2" onClick={() => setCreateStep('choice')}>← Back</Button>
-                <p className="text-xs text-gray-500">Create a normal room first (same as in-person), then open Zoom as a floating window inside the app.</p>
-                <div className="space-y-2">
-                  <Label>Topic / Subject</Label>
-                  <Input
-                    placeholder="Calculus Study Session 🔢"
-                    value={newGroup.topic}
-                    onChange={(e) => setNewGroup({ ...newGroup, topic: e.target.value })}
-                    className="border-blue-200"
-                  />
-                </div>
-                <div className="grid grid-cols-2 gap-4">
-                  <div className="space-y-2">
-                    <Label>Date</Label>
-                    <Input
-                      type="date"
-                      value={newGroup.date}
-                      onChange={(e) => setNewGroup({ ...newGroup, date: e.target.value })}
-                      className="border-blue-200"
-                    />
-                  </div>
-                  <div className="space-y-2">
-                    <Label>Time</Label>
-                    <Input
-                      type="time"
-                      value={newGroup.time}
-                      onChange={(e) => setNewGroup({ ...newGroup, time: e.target.value })}
-                      className="border-blue-200"
-                    />
-                  </div>
-                </div>
-                <div className="grid grid-cols-2 gap-4">
-                  <div className="space-y-2">
-                    <Label>Duration</Label>
-                    <Select
-                      value={newGroup.duration}
-                      onValueChange={(value) => setNewGroup({ ...newGroup, duration: value })}
-                    >
-                      <SelectTrigger className="border-blue-200">
-                        <SelectValue />
-                      </SelectTrigger>
-                      <SelectContent>
-                        <SelectItem value="1 hour">1 hour</SelectItem>
-                        <SelectItem value="2 hours">2 hours</SelectItem>
-                        <SelectItem value="3 hours">3 hours</SelectItem>
-                        <SelectItem value="4+ hours">4+ hours</SelectItem>
-                      </SelectContent>
-                    </Select>
+                  <div className="grid grid-cols-2 gap-4">
+                    <div className="space-y-2">
+                      <Label>Study Type</Label>
+                      <Select
+                        value={newGroup.studyType}
+                        onValueChange={(value) => setNewGroup({ ...newGroup, studyType: value })}
+                      >
+                        <SelectTrigger>
+                          <SelectValue />
+                        </SelectTrigger>
+                        <SelectContent>
+                          <SelectItem value="In-person">In-person</SelectItem>
+                          <SelectItem value="Online">Online</SelectItem>
+                          <SelectItem value="Hybrid">Hybrid</SelectItem>
+                        </SelectContent>
+                      </Select>
+                    </div>
+                    <div className="space-y-2">
+                      <Label>Duration</Label>
+                      <Select
+                        value={newGroup.duration}
+                        onValueChange={(value) => setNewGroup({ ...newGroup, duration: value })}
+                      >
+                        <SelectTrigger>
+                          <SelectValue />
+                        </SelectTrigger>
+                        <SelectContent>
+                          <SelectItem value="1 hour">1 hour</SelectItem>
+                          <SelectItem value="2 hours">2 hours</SelectItem>
+                          <SelectItem value="3 hours">3 hours</SelectItem>
+                          <SelectItem value="4+ hours">4+ hours</SelectItem>
+                        </SelectContent>
+                      </Select>
+                    </div>
                   </div>
                   <div className="space-y-2">
                     <Label>Max Participants</Label>
@@ -782,22 +715,90 @@ export function StudyGroupsPage({ accessToken, userId, currentUserUsername, room
                       max="50"
                       value={newGroup.maxParticipants}
                       onChange={(e) => setNewGroup({ ...newGroup, maxParticipants: parseInt(e.target.value) || 10 })}
+                      className="border-purple-200"
+                    />
+                  </div>
+                  <Button onClick={handleCreateGroup} className="w-full">
+                    Create Study Group
+                  </Button>
+                </>
+              )}
+
+              {createStep === 'online' && (
+                <>
+                  <Button variant="ghost" size="sm" className="mb-2 -ml-2" onClick={() => setCreateStep('choice')}>← Back</Button>
+                  <p className="text-xs text-gray-500">Create a normal room first (same as in-person), then open Zoom as a floating window inside the app.</p>
+                  <div className="space-y-2">
+                    <Label>Topic / Subject</Label>
+                    <Input
+                      placeholder="Calculus Study Session 🔢"
+                      value={newGroup.topic}
+                      onChange={(e) => setNewGroup({ ...newGroup, topic: e.target.value })}
                       className="border-blue-200"
                     />
                   </div>
-                </div>
-                <Button
-                  onClick={handleCreateZoomRoom}
-                  disabled={creatingZoom}
-                  className="w-full bg-blue-600 hover:bg-blue-700 text-white"
-                >
-                  {creatingZoom ? 'Creating Zoom meeting…' : 'Create Zoom room'}
-                </Button>
-              </>
-            )}
-          </div>
-        </DialogContent>
-      </Dialog>
+                  <div className="grid grid-cols-2 gap-4">
+                    <div className="space-y-2">
+                      <Label>Date</Label>
+                      <Input
+                        type="date"
+                        value={newGroup.date}
+                        onChange={(e) => setNewGroup({ ...newGroup, date: e.target.value })}
+                        className="border-blue-200"
+                      />
+                    </div>
+                    <div className="space-y-2">
+                      <Label>Time</Label>
+                      <Input
+                        type="time"
+                        value={newGroup.time}
+                        onChange={(e) => setNewGroup({ ...newGroup, time: e.target.value })}
+                        className="border-blue-200"
+                      />
+                    </div>
+                  </div>
+                  <div className="grid grid-cols-2 gap-4">
+                    <div className="space-y-2">
+                      <Label>Duration</Label>
+                      <Select
+                        value={newGroup.duration}
+                        onValueChange={(value) => setNewGroup({ ...newGroup, duration: value })}
+                      >
+                        <SelectTrigger className="border-blue-200">
+                          <SelectValue />
+                        </SelectTrigger>
+                        <SelectContent>
+                          <SelectItem value="1 hour">1 hour</SelectItem>
+                          <SelectItem value="2 hours">2 hours</SelectItem>
+                          <SelectItem value="3 hours">3 hours</SelectItem>
+                          <SelectItem value="4+ hours">4+ hours</SelectItem>
+                        </SelectContent>
+                      </Select>
+                    </div>
+                    <div className="space-y-2">
+                      <Label>Max Participants</Label>
+                      <Input
+                        type="number"
+                        min="2"
+                        max="50"
+                        value={newGroup.maxParticipants}
+                        onChange={(e) => setNewGroup({ ...newGroup, maxParticipants: parseInt(e.target.value) || 10 })}
+                        className="border-blue-200"
+                      />
+                    </div>
+                  </div>
+                  <Button
+                    onClick={handleCreateZoomRoom}
+                    disabled={creatingZoom}
+                    className="w-full bg-blue-600 hover:bg-blue-700 text-white"
+                  >
+                    {creatingZoom ? 'Creating Zoom meeting…' : 'Create Zoom room'}
+                  </Button>
+                </>
+              )}
+            </div>
+          </DialogContent>
+        </Dialog>
       </div>
 
       {/* Edit room dialog */}
@@ -891,8 +892,8 @@ export function StudyGroupsPage({ accessToken, userId, currentUserUsername, room
                 className="border-purple-200"
               />
             </div>
-            <Button 
-              onClick={handleUpdateGroup} 
+            <Button
+              onClick={handleUpdateGroup}
               className="w-full"
             >
               Save changes
