@@ -130,6 +130,7 @@ export default function App() {
   const [deletingSessionId, setDeletingSessionId] = useState<string | null>(null);
   const [roomUserIsIn, setRoomUserIsIn] = useState<string | null>(null);
   const [friends, setFriends] = useState<Friend[]>([]);
+  const [groupsRefreshTrigger, setGroupsRefreshTrigger] = useState(0);
 
   const [chatFriend, setChatFriend] = useState<Friend | null>(null);
   const [chatInput, setChatInput] = useState('');
@@ -834,6 +835,8 @@ export default function App() {
           const topic = payload?.topic || 'this study group';
           const groupId = payload?.groupId;
           toast.success(`✅ You've been accepted to "${topic}"!`, { duration: 5000 });
+          // Refresh groups list to update button state
+          setGroupsRefreshTrigger(prev => prev + 1);
           // Automatically navigate to the room when accepted
           if (groupId) {
             setTimeout(() => {
@@ -1117,6 +1120,7 @@ export default function App() {
               roomUserIsIn={roomUserIsIn}
               onJoinRoom={navigateToRoom}
               onJoinMeeting={openMeetingLauncher}
+              refreshTrigger={groupsRefreshTrigger}
             />
           )}
           {currentPage === 'room' && currentGroupId && (

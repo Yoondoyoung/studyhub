@@ -34,6 +34,7 @@ interface StudyGroupsPageProps {
   roomUserIsIn?: string | null;
   onJoinRoom: (groupId: string) => void;
   onJoinMeeting?: (meetingId: string) => void;
+  refreshTrigger?: number;
 }
 
 const defaultGroupForm = {
@@ -46,7 +47,7 @@ const defaultGroupForm = {
   duration: '2 hours'
 };
 
-export function StudyGroupsPage({ accessToken, userId, currentUserUsername, roomUserIsIn, onJoinRoom, onJoinMeeting }: StudyGroupsPageProps) {
+export function StudyGroupsPage({ accessToken, userId, currentUserUsername, roomUserIsIn, onJoinRoom, onJoinMeeting, refreshTrigger }: StudyGroupsPageProps) {
   const RECENT_GROUP_STORAGE_KEY = 'studyhub_recent_group';
   const RECENT_GROUP_TTL_MS = 5 * 60 * 1000; // 5 minutes
   const [groups, setGroups] = useState<StudyGroup[]>([]);
@@ -107,6 +108,13 @@ export function StudyGroupsPage({ accessToken, userId, currentUserUsername, room
     
     return () => clearInterval(interval);
   }, []);
+
+  // Refresh groups when refreshTrigger changes (e.g., when application is accepted)
+  useEffect(() => {
+    if (refreshTrigger !== undefined) {
+      fetchGroups();
+    }
+  }, [refreshTrigger]);
 
   const fetchGroups = async () => {
     if (fetchInFlightRef.current) return;
