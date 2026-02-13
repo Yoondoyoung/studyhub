@@ -838,10 +838,28 @@ export default function App() {
           // Refresh groups list to update button state
           setGroupsRefreshTrigger(prev => prev + 1);
           // Automatically navigate to the room when accepted
+          // Wait a bit longer to ensure server has updated participant list
           if (groupId) {
-            setTimeout(() => {
-              navigateToRoom(groupId);
-            }, 1000); // Small delay to let toast show
+            setTimeout(async () => {
+              // Verify we're now a participant before navigating
+              try {
+                const res = await fetch(`${apiBase}/study-groups/${groupId}`, {
+                  headers: { Authorization: `Bearer ${accessToken}` }
+                });
+                const data = await res.json();
+                if (data.group?.participants?.includes(user?.id)) {
+                  navigateToRoom(groupId);
+                } else {
+                  // If still not a participant, wait a bit more and retry
+                  setTimeout(() => {
+                    navigateToRoom(groupId);
+                  }, 1000);
+                }
+              } catch (error) {
+                // If verification fails, still try to navigate
+                navigateToRoom(groupId);
+              }
+            }, 1500); // Increased delay to ensure server update
           }
           return;
         }

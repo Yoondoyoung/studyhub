@@ -164,7 +164,10 @@ export function StudyRoomPage({
   // Fetch room details
   useEffect(() => {
     let cancelled = false;
-    (async () => {
+    let retryCount = 0;
+    const maxRetries = 3;
+    
+    const fetchGroup = async () => {
       try {
         const res = await fetch(`${apiBase}/study-groups/${groupId}`, {
           headers: auth(accessToken),
@@ -173,17 +176,30 @@ export function StudyRoomPage({
         if (!cancelled && data.group) {
           setGroup(data.group);
           if (!data.group.participants?.includes(currentUserId)) {
-            setJoinBlocked(true);
+            // If not a participant yet, retry a few times (in case we just got accepted)
+            if (retryCount < maxRetries) {
+              retryCount++;
+              setTimeout(() => {
+                if (!cancelled) fetchGroup();
+              }, 1000);
+            } else {
+              setJoinBlocked(true);
+              setLoading(false);
+            }
+          } else {
+            // Participant confirmed, stop loading
+            setLoading(false);
           }
         }
       } catch (e) {
         if (!cancelled) console.error('Failed to fetch room', e);
-      } finally {
         if (!cancelled) setLoading(false);
       }
-    })();
+    };
+    
+    fetchGroup();
     return () => { cancelled = true; };
-  }, [groupId, accessToken]);
+  }, [groupId, accessToken, currentUserId]);
 
   // Join presence on mount
   useEffect(() => {
