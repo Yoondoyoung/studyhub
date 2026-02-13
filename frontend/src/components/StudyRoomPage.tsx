@@ -209,12 +209,14 @@ export function StudyRoomPage({
     return () => { cancelled = true; };
   }, [groupId, accessToken, currentUserId]);
 
-  // Join presence on mount
+  // Join presence on mount - try even if joinBlocked to trigger auto-add logic
   useEffect(() => {
     let cancelled = false;
     (async () => {
       try {
-        if (joinBlocked) return;
+        // Wait for group to be loaded first
+        if (!group) return;
+        
         console.log('[StudyRoomPage] join presence effect', {
           groupId,
           joinBlocked,
@@ -222,25 +224,48 @@ export function StudyRoomPage({
           participants: group?.participants,
           currentUserId,
         });
+        
         const res = await fetch(`${apiBase}/study-groups/${groupId}/presence`, {
           method: 'POST',
           headers: { ...auth(accessToken), 'Content-Type': 'application/json' },
         });
         console.log('[StudyRoomPage] presence POST status', res.status);
+        
         if (!res.ok) {
           if (!cancelled && res.status === 403) {
-            setJoinBlocked(true);
-            toast.error('You need to be accepted to join this room.');
+            // Only set joinBlocked if we're sure user is not accepted
+            // (presence POST might auto-add them, so retry once)
+            if (!joinBlocked) {
+              setJoinBlocked(true);
+              toast.error('You need to be accepted to join this room.');
+            }
           }
           return;
         }
-        if (res.ok && !cancelled) joinedRef.current = true;
+        
+        // Success - user is now in participants (either was already or auto-added)
+        if (res.ok && !cancelled) {
+          joinedRef.current = true;
+          // If we were blocked, unblock now since presence POST succeeded
+          if (joinBlocked) {
+            console.log('[StudyRoomPage] presence POST succeeded, unblocking join');
+            setJoinBlocked(false);
+            // Refresh group data to get updated participants
+            const groupRes = await fetch(`${apiBase}/study-groups/${groupId}`, {
+              headers: auth(accessToken),
+            });
+            const groupData = await groupRes.json();
+            if (groupData.group) {
+              setGroup(groupData.group);
+            }
+          }
+        }
       } catch (e) {
         if (!cancelled) console.error('Failed to join presence', e);
       }
     })();
     return () => { cancelled = true; };
-  }, [groupId, accessToken, joinBlocked, group, currentUserId]);
+  }, [groupId, accessToken, group, currentUserId]);
 
   // Fetch room chat history
   useEffect(() => {
