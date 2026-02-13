@@ -25,7 +25,8 @@ import {
   GraduationCap,
   MoreVertical,
   Trash2,
-  Calendar
+  Calendar,
+  ArrowLeft
 } from 'lucide-react';
 
 // Custom icon for Study Groups (people with book)
@@ -1084,10 +1085,20 @@ export default function App() {
         )}
 
         <main className="max-w-6xl mx-auto">
-          <div className="mb-6">
+          <div className="mb-6 flex items-center justify-between">
             <h1 className="text-3xl font-semibold text-gray-900">
               Hi {user?.username || user?.email || 'there'},
             </h1>
+            {currentPage === 'friend-detail' && selectedFriend ? (
+              <Button
+                variant="ghost"
+                onClick={() => setCurrentPage('friends')}
+                className="rounded-xl text-gray-600 hover:text-gray-900"
+              >
+                <ArrowLeft className="size-4 mr-2" />
+                Back to friends
+              </Button>
+            ) : null}
           </div>
           {currentPage === 'dashboard' && (
             <DashboardPage
@@ -1161,7 +1172,6 @@ export default function App() {
             <FriendDetailPage
               accessToken={accessToken}
               friend={selectedFriend}
-              onBack={() => setCurrentPage('friends')}
             />
           )}
         </main>
