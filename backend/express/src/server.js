@@ -1000,6 +1000,72 @@ app.get("/study-groups/:id/chat", async (req, res) => {
   }
 });
 
+// HTTP endpoint to send a room chat message (alternative to WebSocket room:send)
+app.post("/study-groups/:id/chat", async (req, res) => {
+  try {
+    const user = await requireUser(req);
+    const roomId = String(req.params.id || "");
+    if (!roomId) return res.status(400).json({ error: "Room id required" });
+
+    const group = await kvGet(`study-group:${roomId}`);
+    console.log("[chat:post] user", user.id, "roomId", roomId, "group?", !!group);
+    if (!group) return res.status(404).json({ error: "Group not found" });
+
+    // Ensure participants is an array
+    if (!Array.isArray(group.participants)) group.participants = [];
+    console.log("[chat:post] participants", group.participants, "hostId", group.hostId);
+    const isParticipant = group.participants.includes(user.id);
+    const isHost = group.hostId === user.id;
+    if (!isParticipant && !isHost) {
+      console.log("[chat:post] 403 Not accepted for user", user.id, "participants", group.participants);
+      return res.status(403).json({ error: "Not accepted" });
+    }
+
+    const rawContent = String(req.body?.content ?? "").trim();
+    const clientId = req.body?.clientId ? String(req.body.clientId) : null;
+    if (!rawContent) {
+      return res.status(400).json({ error: "Content is required" });
+    }
+
+    // Resolve sender display name
+    const profile = await kvGet(`user:${user.id}`);
+    const senderName =
+      profile?.username ||
+      profile?.email ||
+      user.user_metadata?.username ||
+      user.email ||
+      "User";
+
+    const message = {
+      id: crypto.randomUUID(),
+      clientId,
+      roomId,
+      senderId: user.id,
+      senderName,
+      content: rawContent,
+      createdAt: new Date().toISOString(),
+    };
+
+    const { key, messages } = await getRoomChat(roomId);
+    const nextMessages = [...messages, message];
+    const trimmed = nextMessages.slice(-ROOM_MESSAGE_LIMIT);
+    await kvSet(key, { messages: trimmed });
+
+    // Also fan-out via WebSocket to any connected room listeners
+    try {
+      sendToRoom(roomId, { type: "room:message", message });
+    } catch (err) {
+      console.error("[chat:post] sendToRoom error:", err);
+    }
+
+    return res.json({ message });
+  } catch (err) {
+    if (String(err?.message).includes("Unauthorized"))
+      return res.status(401).json({ error: "Unauthorized" });
+    return res.status(500).json({ error: String(err?.message ?? err) });
+  }
+});
+
 app.post("/study-groups/:id/presence", async (req, res) => {
   try {
     const user = await requireUser(req);
@@ -3483,6 +3549,18 @@ const joinRoom = (roomId, socket) => {
   const rooms = roomsBySocket.get(socket) ?? new Set();
   rooms.add(roomId);
   roomsBySocket.set(socket, rooms);
+  try {
+    console.log(
+      "[ws:joinRoom] user",
+      socket.userId,
+      "joined room",
+      roomId,
+      "total sockets in room",
+      sockets.size
+    );
+  } catch {
+    // best-effort debug log
+  }
 };
 
 const leaveRoom = (roomId, socket) => {
@@ -3496,14 +3574,44 @@ const leaveRoom = (roomId, socket) => {
     rooms.delete(roomId);
     if (rooms.size === 0) roomsBySocket.delete(socket);
   }
+  try {
+    console.log(
+      "[ws:leaveRoom] user",
+      socket.userId,
+      "left room",
+      roomId,
+      "remaining sockets in room",
+      sockets?.size ?? 0
+    );
+  } catch {
+    // best-effort debug log
+  }
 };
 
 const sendToRoom = (roomId, payload) => {
   const sockets = roomSockets.get(roomId);
-  if (!sockets) return;
+  const count = sockets?.size ?? 0;
+  try {
+    console.log(
+      "[ws:sendToRoom] room",
+      roomId,
+      "socket count",
+      count,
+      "payload type",
+      payload?.type
+    );
+  } catch {
+    // ignore logging errors
+  }
+  if (!sockets || count === 0) return;
   const message = JSON.stringify(payload);
   sockets.forEach((socket) => {
     if (socket.readyState === 1) {
+      try {
+        console.log("[ws:sendToRoom] delivering to user", socket.userId);
+      } catch {
+        // ignore
+      }
       socket.send(message);
     }
   });

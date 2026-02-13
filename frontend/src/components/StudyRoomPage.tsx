@@ -77,10 +77,6 @@ interface QuizResult {
 }
 
 const auth = (token: string) => ({ Authorization: `Bearer ${token}` });
-const buildWsUrl = (token: string) => {
-  const base = apiBase.replace(/^http/, 'ws');
-  return `${base}/ws?token=${encodeURIComponent(token)}`;
-};
 
 interface RoomMessage {
   id: string;
@@ -111,10 +107,8 @@ export function StudyRoomPage({
   const joinedRef = useRef(false);
   const [chatMessages, setChatMessages] = useState<RoomMessage[]>([]);
   const [chatInput, setChatInput] = useState('');
-  const [socketReady, setSocketReady] = useState(false);
   const chatScrollRef = useRef<HTMLDivElement | null>(null);
   const chatAutoScrollRef = useRef(true);
-  const socketRef = useRef<WebSocket | null>(null);
   const [joinBlocked, setJoinBlocked] = useState(false);
   const [canJoinRoom, setCanJoinRoom] = useState(false);
 
@@ -252,13 +246,13 @@ export function StudyRoomPage({
     return () => { cancelled = true; };
   }, [groupId, accessToken, group]);
 
-  // Fetch room chat history (only when server allowed)
+  // Fetch room chat history via HTTP polling (only when server allowed)
   useEffect(() => {
     if (!canJoinRoom) return;
     if (!group) return;
     if (group.meetingId) return; // Online rooms: no room chat
     let cancelled = false;
-    (async () => {
+    const fetchChat = async () => {
       try {
         const res = await fetch(`${apiBase}/study-groups/${groupId}/chat`, {
           headers: auth(accessToken),
@@ -268,8 +262,13 @@ export function StudyRoomPage({
       } catch (e) {
         if (!cancelled) console.error('Failed to fetch room chat', e);
       }
-    })();
-    return () => { cancelled = true; };
+    };
+    fetchChat();
+    const interval = setInterval(fetchChat, 2000); // Poll every 2 seconds
+    return () => {
+      cancelled = true;
+      clearInterval(interval);
+    };
   }, [groupId, accessToken, canJoinRoom, group?.meetingId, group]);
 
   // Load quiz files
@@ -340,67 +339,6 @@ export function StudyRoomPage({
     return () => clearInterval(interval);
   }, [quiz, isStudyTime, groupId, accessToken, group?.meetingId, group]);
 
-  // WebSocket: join room + receive messages (only when server allowed)
-  useEffect(() => {
-    if (!canJoinRoom) return;
-    if (!group) return;
-    if (group.meetingId) return; // Online rooms: no room chat
-    const socket = new WebSocket(buildWsUrl(accessToken));
-    socketRef.current = socket;
-    setSocketReady(false);
-
-    socket.onopen = () => {
-      console.log('[StudyRoomPage] WebSocket opened, sending room:join', groupId);
-      setSocketReady(true);
-      socket.send(JSON.stringify({ type: 'room:join', roomId: groupId }));
-    };
-
-    socket.onclose = () => {
-      console.log('[StudyRoomPage] WebSocket closed');
-      setSocketReady(false);
-    };
-
-    socket.onerror = (error) => {
-      console.error('[StudyRoomPage] WebSocket error', error);
-    };
-
-    socket.onmessage = (event) => {
-      try {
-        const payload = JSON.parse(event.data);
-        console.log('[StudyRoomPage] WebSocket message received', payload.type);
-        if (payload?.type === 'room:error') {
-          console.error('[StudyRoomPage] room:error', payload.message);
-          toast.error(payload.message || 'Unable to join room');
-          return;
-        }
-        if (payload?.type !== 'room:message' || !payload?.message) return;
-        const message = payload.message as RoomMessage;
-        if (message.roomId !== groupId) return;
-        console.log('[StudyRoomPage] room:message received', message);
-        setChatMessages((prev) => {
-          if (message.clientId) {
-            const index = prev.findIndex((item) => item.clientId === message.clientId);
-            if (index !== -1) {
-              const next = [...prev];
-              next[index] = { ...message, pending: false };
-              return next;
-            }
-          }
-          return [...prev, message];
-        });
-      } catch (error) {
-        console.error('Failed to parse room chat message:', error);
-      }
-    };
-
-    return () => {
-      try {
-        socket.send(JSON.stringify({ type: 'room:leave', roomId: groupId }));
-      } catch (_) {}
-      socket.close();
-      socketRef.current = null;
-    };
-  }, [groupId, accessToken, canJoinRoom, group?.meetingId, group]);
 
   useEffect(() => {
     if (!group) return;
@@ -689,13 +627,9 @@ export function StudyRoomPage({
     onBack();
   };
 
-  const handleSendMessage = () => {
-    if (!chatInput.trim() || !socketRef.current || !socketReady) {
-      console.log('[StudyRoomPage] handleSendMessage blocked', { 
-        hasInput: !!chatInput.trim(), 
-        socketReady, 
-        hasSocket: !!socketRef.current 
-      });
+  const handleSendMessage = async () => {
+    if (!chatInput.trim()) {
+      console.log('[StudyRoomPage] handleSendMessage blocked - no input');
       return;
     }
     const clientId = crypto.randomUUID();
@@ -712,15 +646,37 @@ export function StudyRoomPage({
       pending: true,
     };
     setChatMessages((prev) => [...prev, tempMessage]);
-    socketRef.current.send(
-      JSON.stringify({
-        type: 'room:send',
-        roomId: groupId,
-        content,
-        clientId,
-      })
-    );
     setChatInput('');
+    try {
+      const res = await fetch(`${apiBase}/study-groups/${groupId}/chat`, {
+        method: 'POST',
+        headers: {
+          ...auth(accessToken),
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({ content, clientId }),
+      });
+      if (!res.ok) {
+        const error = await res.json().catch(() => ({}));
+        throw new Error(error.error || 'Failed to send message');
+      }
+      const data = await res.json();
+      const message = data.message as RoomMessage;
+      setChatMessages((prev) => {
+        const index = prev.findIndex((item) => item.clientId === clientId);
+        if (index !== -1) {
+          const next = [...prev];
+          next[index] = { ...message, pending: false };
+          return next;
+        }
+        return [...prev, message];
+      });
+    } catch (error) {
+      console.error('Failed to send room message:', error);
+      toast.error(error instanceof Error ? error.message : 'Failed to send message');
+      // Remove optimistic message on failure
+      setChatMessages((prev) => prev.filter((item) => item.clientId !== clientId));
+    }
   };
 
   if (loading) {
@@ -1261,9 +1217,7 @@ export function StudyRoomPage({
               <CardHeader className="pb-2">
                 <CardTitle className="text-base flex items-center justify-between">
                   <span>Room chat</span>
-                  <span className="text-xs text-muted-foreground">
-                    {socketReady ? 'Live' : 'Connecting...'}
-                  </span>
+                  <span className="text-xs text-muted-foreground">Live (HTTP)</span>
                 </CardTitle>
               </CardHeader>
               <CardContent className="flex-1 min-h-0 flex flex-col gap-3">
@@ -1323,7 +1277,7 @@ export function StudyRoomPage({
                       }
                     }}
                   />
-                  <Button size="sm" onClick={handleSendMessage} disabled={!chatInput.trim() || !socketReady}>
+                  <Button size="sm" onClick={handleSendMessage} disabled={!chatInput.trim()}>
                     Send
                   </Button>
                 </div>
