@@ -154,6 +154,8 @@ export default function App() {
   const zoomContainerRef = useRef<HTMLDivElement>(null);
   const zoomClientRef = useRef<unknown>(null);
   const zoomMeetingIdRef = useRef<string | null>(null);
+  const [previousGroupsForNotif, setPreviousGroupsForNotif] = useState<any[]>([]);
+  const notifiedApplicantsRef = useRef<Set<string>>(new Set()); // Track shown notifications
 
   useEffect(() => {
     checkSession();
@@ -587,6 +589,141 @@ export default function App() {
       loadAiStudySessions();
     }
   }, [accessToken]);
+
+  // Handle applicant actions
+  const handleApplicantAction = async (groupId: string, applicantId: string, action: 'accept' | 'reject', toastId: string | number) => {
+    try {
+      const response = await fetch(`${apiBase}/study-groups/${groupId}/manage`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${accessToken}`
+        },
+        body: JSON.stringify({ applicantId, action })
+      });
+      const data = await response.json();
+      
+      if (data.success) {
+        // Update the same toast with success message, remove buttons, auto-dismiss after 3 seconds
+        toast.success(action === 'accept' ? '✅ Applicant accepted' : '❌ Applicant rejected', { 
+          id: toastId,
+          duration: 3000,
+          action: undefined,
+          cancel: undefined
+        });
+        // Keep in notifiedApplicantsRef to prevent re-notification
+      } else {
+        toast.error(data.error || 'Action failed', { 
+          id: toastId,
+          duration: 3000,
+          action: undefined,
+          cancel: undefined
+        });
+      }
+    } catch (error) {
+      console.error('Failed to manage applicant:', error);
+      toast.error('Action failed', { 
+        id: toastId,
+        duration: 3000,
+        action: undefined,
+        cancel: undefined
+      });
+    }
+  };
+
+  // Global polling for applicant notifications
+  useEffect(() => {
+    if (!accessToken || !user?.id) return;
+
+    const checkForNewApplicants = async () => {
+      try {
+        const response = await fetch(`${apiBase}/study-groups`);
+        const data = await response.json();
+        const groups = data.groups || [];
+
+        // Check for new applicants and application results
+        if (previousGroupsForNotif.length > 0) {
+          groups.forEach((newGroup: any) => {
+            // 1. Check for new applicants (for hosts)
+            if (newGroup.hostId === user.id) {
+              const oldGroup = previousGroupsForNotif.find((g: any) => g.id === newGroup.id);
+              if (oldGroup) {
+                const oldApplicants = oldGroup.applicants || [];
+                const newApplicants = newGroup.applicants || [];
+                
+                // Find newly added applicants
+                const addedApplicants = newApplicants.filter(
+                  (applicantId: string) => !oldApplicants.includes(applicantId)
+                );
+                
+                // Show toast for each new applicant (only once)
+                addedApplicants.forEach((applicantId: string) => {
+                  const notifKey = `${newGroup.id}-${applicantId}`;
+                  if (!notifiedApplicantsRef.current.has(notifKey)) {
+                    notifiedApplicantsRef.current.add(notifKey);
+                    
+                    const applicantInfo = newGroup.applicantsWithNames?.find(
+                      (item: { id: string; username: string }) => item.id === applicantId
+                    );
+                    const applicantName = applicantInfo?.username || `User ${applicantId.slice(0, 8)}`;
+                    
+                    const toastId = toast.info(
+                      `📬 ${applicantName} wants to join "${newGroup.topic}"`,
+                      {
+                        duration: Infinity,
+                        action: {
+                          label: 'Accept',
+                          onClick: () => handleApplicantAction(newGroup.id, applicantId, 'accept', toastId)
+                        },
+                        cancel: {
+                          label: 'Reject',
+                          onClick: () => handleApplicantAction(newGroup.id, applicantId, 'reject', toastId)
+                        }
+                      }
+                    );
+                  }
+                });
+              }
+            }
+            
+            // 2. Check if I was accepted/rejected (for applicants)
+            const oldGroup = previousGroupsForNotif.find((g: any) => g.id === newGroup.id);
+            if (oldGroup) {
+              const wasApplicant = oldGroup.applicants?.includes(user.id);
+              const isStillApplicant = newGroup.applicants?.includes(user.id);
+              const isNowParticipant = newGroup.participants?.includes(user.id);
+              
+              if (wasApplicant && !isStillApplicant) {
+                // I was an applicant but not anymore - check result
+                const notifKey = `applicant-result-${newGroup.id}`;
+                if (!notifiedApplicantsRef.current.has(notifKey)) {
+                  notifiedApplicantsRef.current.add(notifKey);
+                  
+                  if (isNowParticipant) {
+                    toast.success(`✅ You've been accepted to "${newGroup.topic}"!`, { duration: 5000 });
+                  } else {
+                    toast.error(`❌ Your application to "${newGroup.topic}" was rejected`, { duration: 5000 });
+                  }
+                }
+              }
+            }
+          });
+        }
+        
+        setPreviousGroupsForNotif(groups);
+      } catch (error) {
+        console.error('Failed to check for new applicants:', error);
+      }
+    };
+
+    // Initial check
+    checkForNewApplicants();
+
+    // Poll every 5 seconds
+    const interval = setInterval(checkForNewApplicants, 5000);
+
+    return () => clearInterval(interval);
+  }, [accessToken, user?.id, previousGroupsForNotif]);
 
   useEffect(() => {
     if (!accessToken) return;
