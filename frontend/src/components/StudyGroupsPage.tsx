@@ -6,7 +6,7 @@ import { Card, CardContent } from './ui/card';
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger } from './ui/dialog';
 import { Badge } from './ui/badge';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from './ui/select';
-import { MapPin, Calendar, Users, Plus, CheckCircle2, XCircle, Clock, Heart, Trash2, Video, Pencil, Monitor } from 'lucide-react';
+import { MapPin, Calendar, Users, Plus, CheckCircle2, XCircle, Clock, Trash2, Video, Pencil, Monitor } from 'lucide-react';
 import { toast } from 'sonner';
 import { apiBase } from '../utils/api';
 
@@ -52,7 +52,6 @@ export function StudyGroupsPage({ accessToken, userId, currentUserUsername, room
   const [createStep, setCreateStep] = useState<'choice' | 'in-person' | 'online'>('choice');
   const [editingGroup, setEditingGroup] = useState<StudyGroup | null>(null);
   const [editForm, setEditForm] = useState(defaultGroupForm);
-  const [favorites, setFavorites] = useState<Set<string>>(new Set());
   const [newGroup, setNewGroup] = useState(defaultGroupForm);
   const [creatingZoom, setCreatingZoom] = useState(false);
 
@@ -312,18 +311,6 @@ export function StudyGroupsPage({ accessToken, userId, currentUserUsername, room
       console.error('Failed to delete group:', error);
       toast.error('Failed to delete room');
     }
-  };
-
-  const toggleFavorite = (groupId: string) => {
-    setFavorites(prev => {
-      const newFavorites = new Set(prev);
-      if (newFavorites.has(groupId)) {
-        newFavorites.delete(groupId);
-      } else {
-        newFavorites.add(groupId);
-      }
-      return newFavorites;
-    });
   };
 
   const sortedGroups = [...groups].sort((a, b) => {
@@ -698,16 +685,6 @@ export function StudyGroupsPage({ accessToken, userId, currentUserUsername, room
                         </Badge>
                       )}
                     </div>
-                    <Button
-                      variant="ghost"
-                      size="sm"
-                      className="h-10 w-10 p-0 rounded-full hover:bg-gray-100/70"
-                      onClick={() => toggleFavorite(group.id)}
-                    >
-                      <Heart 
-                        className={`size-5 ${favorites.has(group.id) ? 'fill-pink-500 text-pink-500' : 'text-gray-400'}`} 
-                      />
-                    </Button>
                   </div>
 
                   {/* Location */}
