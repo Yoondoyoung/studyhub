@@ -116,6 +116,7 @@ export function StudyRoomPage({
   const chatAutoScrollRef = useRef(true);
   const socketRef = useRef<WebSocket | null>(null);
   const [joinBlocked, setJoinBlocked] = useState(false);
+  const [canJoinRoom, setCanJoinRoom] = useState(false);
 
   // Group Quiz States
   const [uploadedFiles, setUploadedFiles] = useState<UploadedFile[]>([]);
@@ -219,8 +220,9 @@ export function StudyRoomPage({
               return;
             }
             // After retry or already blocked, show error
-            if (!cancelled && !joinBlocked) {
+            if (!cancelled) {
               setJoinBlocked(true);
+              setCanJoinRoom(false);
               toast.error('You need to be accepted to join this room.');
             }
             return;
@@ -237,32 +239,22 @@ export function StudyRoomPage({
           console.log('[StudyRoomPage] presence POST succeeded - user can join');
           joinedRef.current = true;
           setJoinBlocked(false); // Clear any previous block
-          
-          // Refresh group data to get updated participants (for UI display)
-          const groupRes = await fetch(`${apiBase}/study-groups/${groupId}`, {
-            headers: auth(accessToken),
-          });
-          const groupData = await groupRes.json();
-          if (groupData.group && !cancelled) {
-            setGroup(groupData.group);
-          }
+          setCanJoinRoom(true);
         }
       } catch (e) {
         if (!cancelled) console.error('Failed to join presence', e);
       }
     };
     
-    // Only try if not already blocked (unless it's the first attempt)
-    if (!joinBlocked || retryCount === 0) {
-      tryJoinPresence();
-    }
+    // Always let server decide; we already cap retries inside
+    tryJoinPresence();
     
     return () => { cancelled = true; };
   }, [groupId, accessToken, group]);
 
-  // Fetch room chat history
+  // Fetch room chat history (only when server allowed)
   useEffect(() => {
-    if (joinBlocked) return;
+    if (!canJoinRoom) return;
     if (!group) return;
     if (group.meetingId) return; // Online rooms: no room chat
     let cancelled = false;
@@ -278,7 +270,7 @@ export function StudyRoomPage({
       }
     })();
     return () => { cancelled = true; };
-  }, [groupId, accessToken, joinBlocked, group?.meetingId, group]);
+  }, [groupId, accessToken, canJoinRoom, group?.meetingId, group]);
 
   // Load quiz files
   useEffect(() => {
@@ -348,9 +340,9 @@ export function StudyRoomPage({
     return () => clearInterval(interval);
   }, [quiz, isStudyTime, groupId, accessToken, group?.meetingId, group]);
 
-  // WebSocket: join room + receive messages
+  // WebSocket: join room + receive messages (only when server allowed)
   useEffect(() => {
-    if (joinBlocked) return;
+    if (!canJoinRoom) return;
     if (!group) return;
     if (group.meetingId) return; // Online rooms: no room chat
     const socket = new WebSocket(buildWsUrl(accessToken));
@@ -408,7 +400,7 @@ export function StudyRoomPage({
       socket.close();
       socketRef.current = null;
     };
-  }, [groupId, accessToken, joinBlocked, group?.meetingId, group]);
+  }, [groupId, accessToken, canJoinRoom, group?.meetingId, group]);
 
   useEffect(() => {
     if (!group) return;
