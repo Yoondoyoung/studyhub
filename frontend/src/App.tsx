@@ -898,34 +898,46 @@ export default function App() {
   return (
     <div className="min-h-screen bg-gradient-to-br from-[#eaf5ff] via-[#f7f9ff] to-[#fde9f1] flex">
       {/* Sidebar */}
-      <aside className="fixed left-6 top-6 bottom-6 w-20 bg-white/90 backdrop-blur rounded-[32px] shadow-xl flex flex-col items-center py-8">
-        <div className="size-12 rounded-2xl bg-[#e9f6ff] flex items-center justify-center">
-          <GraduationCap className="size-6 text-gray-800" />
+      <aside className="group/sidebar fixed left-6 top-6 bottom-6 w-20 hover:w-64 bg-white/90 backdrop-blur rounded-[32px] shadow-xl flex flex-col py-8 px-3 transition-all duration-300 overflow-visible">
+        <div className="h-12 flex items-center justify-center group-hover/sidebar:justify-start transition-all">
+          <div className="size-12 rounded-2xl bg-[#e9f6ff] flex items-center justify-center shrink-0">
+            <GraduationCap className="size-6 text-gray-800" />
+          </div>
         </div>
 
-        <nav className="mt-10 flex flex-col items-center gap-5 flex-1">
+        <nav className="mt-10 flex flex-col gap-3 flex-1">
           <button
             onClick={() => navigateTo('dashboard')}
-            className={`size-12 rounded-full flex items-center justify-center transition-colors ${
+            className="w-full rounded-xl px-1.5 py-1 flex items-center gap-3 hover:bg-gray-50 transition-colors"
+            title="Dashboard"
+          >
+            <span className={`size-10 rounded-full flex items-center justify-center shrink-0 transition-colors ${
               currentPage === 'dashboard'
                 ? 'bg-black text-white shadow-md'
-                : 'bg-white text-gray-600 hover:bg-gray-100'
-            }`}
-            title="Home"
-          >
-            <LayoutDashboard className="size-5" />
+                : 'bg-white text-gray-600'
+            }`}>
+              <LayoutDashboard className="size-5" />
+            </span>
+            <span className="text-sm font-medium text-gray-700 whitespace-nowrap overflow-hidden max-w-0 opacity-0 translate-x-1 group-hover/sidebar:max-w-[140px] group-hover/sidebar:opacity-100 group-hover/sidebar:translate-x-0 transition-all duration-200">
+              Dashboard
+            </span>
           </button>
 
           <button
             onClick={() => navigateTo('study-groups')}
-            className={`size-12 rounded-full flex items-center justify-center transition-colors ${
+            className="w-full rounded-xl px-1.5 py-1 flex items-center gap-3 hover:bg-gray-50 transition-colors"
+            title="Group Study"
+          >
+            <span className={`size-10 rounded-full flex items-center justify-center shrink-0 transition-colors ${
               currentPage === 'study-groups'
                 ? 'bg-black text-white shadow-md'
-                : 'bg-white text-gray-600 hover:bg-gray-100'
-            }`}
-            title="Study groups"
-          >
-            <StudyGroupIcon className="size-5" />
+                : 'bg-white text-gray-600'
+            }`}>
+              <StudyGroupIcon className="size-5" />
+            </span>
+            <span className="text-sm font-medium text-gray-700 whitespace-nowrap overflow-hidden max-w-0 opacity-0 translate-x-1 group-hover/sidebar:max-w-[140px] group-hover/sidebar:opacity-100 group-hover/sidebar:translate-x-0 transition-all duration-200">
+              Group Study
+            </span>
           </button>
           
           <div className="relative">
@@ -935,20 +947,25 @@ export default function App() {
                 loadAiStudySessions();
               }}
               onClick={handleAiStudyClick}
-              className={`size-12 rounded-full flex items-center justify-center transition-colors ${
+              className="w-full rounded-xl px-1.5 py-1 flex items-center gap-3 hover:bg-gray-50 transition-colors"
+              title="AI Study"
+            >
+              <span className={`size-10 rounded-full flex items-center justify-center shrink-0 transition-colors ${
                 currentPage === 'solo-study'
                   ? 'bg-black text-white shadow-md'
-                  : 'bg-white text-gray-600 hover:bg-gray-100'
-              }`}
-              title="AI study"
-            >
-              <BookOpen className="size-5" />
+                  : 'bg-white text-gray-600'
+              }`}>
+                <BookOpen className="size-5" />
+              </span>
+              <span className="text-sm font-medium text-gray-700 whitespace-nowrap overflow-hidden max-w-0 opacity-0 translate-x-1 group-hover/sidebar:max-w-[140px] group-hover/sidebar:opacity-100 group-hover/sidebar:translate-x-0 transition-all duration-200">
+                AI Study
+              </span>
             </button>
 
             {/* Expanded session list with animation */}
             {showAiStudyDropdown && aiStudySessions.length > 0 && (
               <div 
-                className="absolute left-16 top-1/2 -translate-y-1/2 w-44 space-y-0.5 overflow-hidden rounded-xl bg-white shadow-lg p-2"
+                className="absolute left-full ml-2 top-1/2 -translate-y-1/2 w-44 space-y-0.5 overflow-hidden rounded-xl bg-white shadow-lg p-2"
                 onMouseLeave={() => setShowAiStudyDropdown(false)}
                 style={{
                   animation: 'slideDown 0.2s ease-out'
@@ -994,33 +1011,51 @@ export default function App() {
           
           <button
             onClick={() => navigateTo('calendar')}
-            className={`size-12 rounded-full flex items-center justify-center transition-colors ${
-              currentPage === 'calendar'
-                ? 'bg-black text-white shadow-md'
-                : 'bg-white text-gray-600 hover:bg-gray-100'
-            }`}
+            className="w-full rounded-xl px-1.5 py-1 flex items-center gap-3 hover:bg-gray-50 transition-colors"
             title="Calendar"
           >
-            <Calendar className="size-5" />
+            <span className={`size-10 rounded-full flex items-center justify-center shrink-0 transition-colors ${
+              currentPage === 'calendar'
+                ? 'bg-black text-white shadow-md'
+                : 'bg-white text-gray-600'
+            }`}>
+              <Calendar className="size-5" />
+            </span>
+            <span className="text-sm font-medium text-gray-700 whitespace-nowrap overflow-hidden max-w-0 opacity-0 translate-x-1 group-hover/sidebar:max-w-[140px] group-hover/sidebar:opacity-100 group-hover/sidebar:translate-x-0 transition-all duration-200">
+              Calendar
+            </span>
           </button>
-        </nav>
 
-        <div className="flex flex-col items-center gap-4">
           <button
             onClick={() => setCurrentPage('profile')}
-            className="size-12 rounded-full bg-white text-gray-600 hover:bg-gray-100 flex items-center justify-center"
+            className="w-full rounded-xl px-1.5 py-1 flex items-center gap-3 hover:bg-gray-50 transition-colors"
             title="Profile"
           >
-            <UserCircle className="size-5" />
+            <span className={`size-10 rounded-full flex items-center justify-center shrink-0 transition-colors ${
+              currentPage === 'profile'
+                ? 'bg-black text-white shadow-md'
+                : 'bg-white text-gray-600'
+            }`}>
+              <UserCircle className="size-5" />
+            </span>
+            <span className="text-sm font-medium text-gray-700 whitespace-nowrap overflow-hidden max-w-0 opacity-0 translate-x-1 group-hover/sidebar:max-w-[140px] group-hover/sidebar:opacity-100 group-hover/sidebar:translate-x-0 transition-all duration-200">
+              Profile
+            </span>
           </button>
+
           <button
             onClick={handleLogout}
-            className="size-10 rounded-full flex items-center justify-center bg-white text-gray-400 hover:bg-gray-100"
-            title="Log out"
+            className="w-full rounded-xl px-1.5 py-1 flex items-center gap-3 hover:bg-gray-50 transition-colors"
+            title="Logout"
           >
-            <LogOut className="size-4" />
+            <span className="size-10 rounded-full flex items-center justify-center shrink-0 transition-colors bg-white text-gray-400">
+              <LogOut className="size-4" />
+            </span>
+            <span className="text-sm font-medium text-gray-500 whitespace-nowrap overflow-hidden max-w-0 opacity-0 translate-x-1 group-hover/sidebar:max-w-[140px] group-hover/sidebar:opacity-100 group-hover/sidebar:translate-x-0 transition-all duration-200">
+              Logout
+            </span>
           </button>
-        </div>
+        </nav>
       </aside>
 
       {/* Main Content */}
