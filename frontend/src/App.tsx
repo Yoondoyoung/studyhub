@@ -832,7 +832,14 @@ export default function App() {
 
         if (payload?.type === 'study-group:application:accepted') {
           const topic = payload?.topic || 'this study group';
+          const groupId = payload?.groupId;
           toast.success(`✅ You've been accepted to "${topic}"!`, { duration: 5000 });
+          // Automatically navigate to the room when accepted
+          if (groupId) {
+            setTimeout(() => {
+              navigateToRoom(groupId);
+            }, 1000); // Small delay to let toast show
+          }
           return;
         }
 
