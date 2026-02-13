@@ -1667,7 +1667,7 @@ export function DashboardPage({ accessToken, onOpenChat, onViewFriend }: Dashboa
               className={`overflow-hidden rounded-3xl shadow-[0_20px_60px_rgba(15,23,42,0.08)] transition-all duration-1000 ease-in-out ${
                 isFriendsExpanded
                   ? 'max-h-0 opacity-0 -translate-y-8 pointer-events-none'
-                  : 'max-h-[310px] min-h-[310px] opacity-100 translate-y-0'
+                  : 'max-h-[280px] min-h-[280px] opacity-100 translate-y-0'
               }`}
             >
               <div className="bg-white/90 rounded-3xl p-5 h-full flex flex-col">
@@ -1735,7 +1735,7 @@ export function DashboardPage({ accessToken, onOpenChat, onViewFriend }: Dashboa
 
             <div
               className={`bg-white/90 rounded-3xl shadow-[0_20px_60px_rgba(15,23,42,0.08)] p-5 cursor-pointer self-center overflow-hidden transition-all duration-500 ease-in-out ${
-                isFriendsExpanded ? 'h-[calc(100%-0.75rem)] w-[97%]' : 'h-[320px] w-full'
+                isFriendsExpanded ? 'h-[calc(100%-0.75rem)] w-[97%]' : 'h-[280px] w-full'
               }`}
               onClick={toggleFriendsCard}
             >
