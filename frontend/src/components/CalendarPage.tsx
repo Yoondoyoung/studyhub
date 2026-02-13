@@ -50,6 +50,8 @@ interface CalendarPageProps {
   accessToken: string;
 }
 
+type CalendarViewMode = 'month' | 'week' | 'day';
+
 function getWeekRange(date: Date): { start: Date; end: Date } {
   const d = new Date(date);
   const day = d.getDay();
@@ -58,6 +60,14 @@ function getWeekRange(date: Date): { start: Date; end: Date } {
   start.setHours(0, 0, 0, 0);
   const end = new Date(start);
   end.setDate(end.getDate() + 6);
+  end.setHours(23, 59, 59, 999);
+  return { start, end };
+}
+
+function getDayRange(date: Date): { start: Date; end: Date } {
+  const start = new Date(date);
+  start.setHours(0, 0, 0, 0);
+  const end = new Date(start);
   end.setHours(23, 59, 59, 999);
   return { start, end };
 }
@@ -90,6 +100,7 @@ function toRfc3339WithLocalOffset(dt: Date) {
 
 export function CalendarPage({ accessToken }: CalendarPageProps) {
   const [currentMonth, setCurrentMonth] = useState<Date>(new Date());
+  const [calendarViewMode, setCalendarViewMode] = useState<CalendarViewMode>('month');
   const [localTasks, setLocalTasks] = useState<CalendarTask[]>([]);
   const [googleTasks, setGoogleTasks] = useState<CalendarTask[]>([]);
   const [completedGoogleTasks, setCompletedGoogleTasks] = useState<CalendarTask[]>([]);
@@ -321,7 +332,7 @@ export function CalendarPage({ accessToken }: CalendarPageProps) {
         }
 
         setCompletedGoogleTasks((prev) => prev.filter((t) => t.id !== task.id));
-        await fetchGoogleEventsForMonth(currentMonth);
+        await fetchGoogleEventsForRange(getVisibleRange(currentMonth, calendarViewMode));
         toast.success('Google event restored.');
       } catch (err) {
         console.error('Google undo error:', err);
@@ -494,7 +505,7 @@ export function CalendarPage({ accessToken }: CalendarPageProps) {
       throw new Error(msg);
     }
 
-    await fetchGoogleEventsForMonth(currentMonth);
+    await fetchGoogleEventsForRange(getVisibleRange(currentMonth, calendarViewMode));
     toast.success('Google event updated.');
   };
 
@@ -636,6 +647,56 @@ export function CalendarPage({ accessToken }: CalendarPageProps) {
     return tasksByDate[str] || [];
   };
 
+  const getDisplayWeekRange = useCallback((d: Date) => {
+    const start = new Date(d);
+    start.setHours(0, 0, 0, 0);
+    start.setDate(start.getDate() - start.getDay());
+    const end = new Date(start);
+    end.setDate(end.getDate() + 6);
+    end.setHours(23, 59, 59, 999);
+    return { start, end };
+  }, []);
+
+  const displayWeekDates = useMemo(() => {
+    const { start } = getDisplayWeekRange(currentMonth);
+    return Array.from({ length: 7 }, (_, idx) => {
+      const date = new Date(start);
+      date.setDate(start.getDate() + idx);
+      return date;
+    });
+  }, [currentMonth, getDisplayWeekRange]);
+
+  const displayDayDate = useMemo(() => {
+    const day = new Date(currentMonth);
+    day.setHours(0, 0, 0, 0);
+    return day;
+  }, [currentMonth]);
+
+  const calendarHeaderLabel = useMemo(() => {
+    if (calendarViewMode === 'month') {
+      return currentMonth.toLocaleDateString('en-US', { month: 'long', year: 'numeric' });
+    }
+    if (calendarViewMode === 'week') {
+      return `${displayWeekDates[0].toLocaleDateString('en-US', {
+        month: 'short',
+        day: 'numeric',
+      })} - ${displayWeekDates[6].toLocaleDateString('en-US', {
+        month: 'short',
+        day: 'numeric',
+        year:
+          displayWeekDates[0].getFullYear() !== displayWeekDates[6].getFullYear()
+            ? 'numeric'
+            : undefined,
+      })}`;
+    }
+    return displayDayDate.toLocaleDateString('en-US', {
+      weekday: 'short',
+      month: 'short',
+      day: 'numeric',
+      year: 'numeric',
+    });
+  }, [calendarViewMode, currentMonth, displayDayDate, displayWeekDates]);
+
   const DraggableTaskChip = ({
     task,
     source,
@@ -678,8 +739,17 @@ export function CalendarPage({ accessToken }: CalendarPageProps) {
     start.setHours(0, 0, 0, 0);
     const end = new Date(d.getFullYear(), d.getMonth() + 1, 0);
     end.setHours(23, 59, 59, 999);
-    return { timeMin: start.toISOString(), timeMax: end.toISOString() };
+    return { start, end };
   }, []);
+
+  const getVisibleRange = useCallback(
+    (d: Date, viewMode: CalendarViewMode) => {
+      if (viewMode === 'day') return getDayRange(d);
+      if (viewMode === 'week') return getDisplayWeekRange(d);
+      return getMonthRange(d);
+    },
+    [getDisplayWeekRange, getMonthRange]
+  );
 
   const toHHMM = useCallback((dt: Date) => {
     const hh = String(dt.getHours()).padStart(2, '0');
@@ -760,11 +830,12 @@ export function CalendarPage({ accessToken }: CalendarPageProps) {
     }
   }, [accessToken]);
 
-  const fetchGoogleEventsForMonth = useCallback(
-    async (month: Date) => {
+  const fetchGoogleEventsForRange = useCallback(
+    async (range: { start: Date; end: Date }) => {
       setGoogleSyncing(true);
       try {
-        const { timeMin, timeMax } = getMonthRange(month);
+        const timeMin = range.start.toISOString();
+        const timeMax = range.end.toISOString();
         const res = await fetch(
           `${apiBase}/google/calendar/events?timeMin=${encodeURIComponent(
             timeMin
@@ -787,7 +858,7 @@ export function CalendarPage({ accessToken }: CalendarPageProps) {
         setGoogleSyncing(false);
       }
     },
-    [accessToken, getMonthRange, mapGoogleEventsToTasks]
+    [accessToken, mapGoogleEventsToTasks]
   );
 
   const startGoogleConnect = useCallback(async (force = false) => {
@@ -810,14 +881,21 @@ export function CalendarPage({ accessToken }: CalendarPageProps) {
         await startGoogleConnect();
         return;
       }
-      await fetchGoogleEventsForMonth(currentMonth);
+      await fetchGoogleEventsForRange(getVisibleRange(currentMonth, calendarViewMode));
       toast.success('Google Calendar synced.');
     } catch (err) {
       console.error(err);
       toast.error('Google sync failed.');
       setGoogleSyncing(false);
     }
-  }, [currentMonth, fetchGoogleEventsForMonth, fetchGoogleStatus, startGoogleConnect]);
+  }, [
+    calendarViewMode,
+    currentMonth,
+    fetchGoogleEventsForRange,
+    fetchGoogleStatus,
+    getVisibleRange,
+    startGoogleConnect,
+  ]);
 
   useEffect(() => {
     const params = new URLSearchParams(window.location.search);
@@ -836,13 +914,13 @@ export function CalendarPage({ accessToken }: CalendarPageProps) {
     if (googleParam === 'connected') {
       toast.success('Google connected.');
       setGoogleConnected(true);
-      fetchGoogleEventsForMonth(currentMonth).catch(() => {});
+      fetchGoogleEventsForRange(getVisibleRange(currentMonth, calendarViewMode)).catch(() => {});
       return;
     }
     if (googleParam === 'error') {
       toast.error('Google connection failed.');
     }
-  }, [currentMonth, fetchGoogleEventsForMonth]);
+  }, [calendarViewMode, currentMonth, fetchGoogleEventsForRange, getVisibleRange]);
 
   useEffect(() => {
     fetchGoogleStatus().catch(() => {});
@@ -850,8 +928,8 @@ export function CalendarPage({ accessToken }: CalendarPageProps) {
 
   useEffect(() => {
     if (!googleConnected) return;
-    fetchGoogleEventsForMonth(currentMonth).catch(() => {});
-  }, [currentMonth, googleConnected, fetchGoogleEventsForMonth]);
+    fetchGoogleEventsForRange(getVisibleRange(currentMonth, calendarViewMode)).catch(() => {});
+  }, [calendarViewMode, currentMonth, fetchGoogleEventsForRange, getVisibleRange, googleConnected]);
 
   return (
     <div className="rounded-[36px] bg-white/60 shadow-[0_30px_80px_rgba(15,23,42,0.08)] p-6 h-[720px] overflow-hidden">
@@ -863,6 +941,32 @@ export function CalendarPage({ accessToken }: CalendarPageProps) {
             <div className="flex items-center justify-between px-4 py-3 border-b border-gray-100 shrink-0">
               <h2 className="text-base font-semibold text-gray-900">Calendar</h2>
               <div className="flex items-center gap-2">
+                <div className="flex items-center rounded-md border border-gray-200 p-0.5 bg-gray-50">
+                  <Button
+                    size="sm"
+                    variant={calendarViewMode === 'day' ? 'default' : 'ghost'}
+                    className="h-7 px-2 text-xs"
+                    onClick={() => setCalendarViewMode('day')}
+                  >
+                    Day
+                  </Button>
+                  <Button
+                    size="sm"
+                    variant={calendarViewMode === 'week' ? 'default' : 'ghost'}
+                    className="h-7 px-2 text-xs"
+                    onClick={() => setCalendarViewMode('week')}
+                  >
+                    Week
+                  </Button>
+                  <Button
+                    size="sm"
+                    variant={calendarViewMode === 'month' ? 'default' : 'ghost'}
+                    className="h-7 px-2 text-xs"
+                    onClick={() => setCalendarViewMode('month')}
+                  >
+                    Month
+                  </Button>
+                </div>
                 <Button
                   variant="outline"
                   size="sm"
@@ -879,24 +983,44 @@ export function CalendarPage({ accessToken }: CalendarPageProps) {
                   size="icon"
                   className="size-8"
                   onClick={() =>
-                    setCurrentMonth(
-                      new Date(currentMonth.getFullYear(), currentMonth.getMonth() - 1)
-                    )
+                    setCurrentMonth((prev) => {
+                      if (calendarViewMode === 'day') {
+                        const next = new Date(prev);
+                        next.setDate(next.getDate() - 1);
+                        return next;
+                      }
+                      if (calendarViewMode === 'week') {
+                        const next = new Date(prev);
+                        next.setDate(next.getDate() - 7);
+                        return next;
+                      }
+                      return new Date(prev.getFullYear(), prev.getMonth() - 1, 1);
+                    })
                   }
                 >
                   <ChevronLeft className="size-4" />
                 </Button>
                 <span className="text-sm font-medium min-w-[120px] text-center">
-                  {currentMonth.toLocaleDateString('en-US', { month: 'long', year: 'numeric' })}
+                  {calendarHeaderLabel}
                 </span>
                 <Button
                   variant="outline"
                   size="icon"
                   className="size-8"
                   onClick={() =>
-                    setCurrentMonth(
-                      new Date(currentMonth.getFullYear(), currentMonth.getMonth() + 1)
-                    )
+                    setCurrentMonth((prev) => {
+                      if (calendarViewMode === 'day') {
+                        const next = new Date(prev);
+                        next.setDate(next.getDate() + 1);
+                        return next;
+                      }
+                      if (calendarViewMode === 'week') {
+                        const next = new Date(prev);
+                        next.setDate(next.getDate() + 7);
+                        return next;
+                      }
+                      return new Date(prev.getFullYear(), prev.getMonth() + 1, 1);
+                    })
                   }
                 >
                   <ChevronRight className="size-4" />
@@ -905,36 +1029,78 @@ export function CalendarPage({ accessToken }: CalendarPageProps) {
             </div>
 
             <div className="flex-1 overflow-auto p-4 min-h-0">
-              <div className="grid grid-cols-7 gap-px">
-                {WEEKDAYS.map((d) => (
-                  <div
-                    key={d}
-                    className="text-center text-xs font-medium text-gray-500 py-2"
-                  >
-                    {d}
-                  </div>
-                ))}
-                {(() => {
-                  const year = currentMonth.getFullYear();
-                  const month = currentMonth.getMonth();
-                  const firstDay = new Date(year, month, 1);
-                  const lastDay = new Date(year, month + 1, 0);
-                  const startPad = firstDay.getDay();
-                  const daysInMonth = lastDay.getDate();
-                  const cells: (Date | null)[] = [];
-                  for (let i = 0; i < startPad; i++) cells.push(null);
-                  for (let d = 1; d <= daysInMonth; d++) {
-                    cells.push(new Date(year, month, d));
-                  }
-                  return cells.map((date, idx) => {
-                    if (!date) {
+              {calendarViewMode === 'month' ? (
+                <div className="grid grid-cols-7 gap-px">
+                  {WEEKDAYS.map((d) => (
+                    <div
+                      key={d}
+                      className="text-center text-xs font-medium text-gray-500 py-2"
+                    >
+                      {d}
+                    </div>
+                  ))}
+                  {(() => {
+                    const year = currentMonth.getFullYear();
+                    const month = currentMonth.getMonth();
+                    const firstDay = new Date(year, month, 1);
+                    const lastDay = new Date(year, month + 1, 0);
+                    const startPad = firstDay.getDay();
+                    const daysInMonth = lastDay.getDate();
+                    const cells: (Date | null)[] = [];
+                    for (let i = 0; i < startPad; i++) cells.push(null);
+                    for (let d = 1; d <= daysInMonth; d++) {
+                      cells.push(new Date(year, month, d));
+                    }
+                    return cells.map((date, idx) => {
+                      if (!date) {
+                        return (
+                          <div
+                            key={`empty-${idx}`}
+                            className="min-h-[100px] bg-gray-50/50"
+                          />
+                        );
+                      }
+                      const dateStr = toDateStr(date);
+                      const dayTasks = getTasksForDate(date);
+                      const isToday = dateStr === todayStr;
                       return (
                         <div
-                          key={`empty-${idx}`}
-                          className="min-h-[100px] bg-gray-50/50"
-                        />
+                          key={dateStr}
+                          className={cn(
+                            'min-h-[100px] p-2 border border-gray-100 rounded-lg flex flex-col',
+                            isToday && 'bg-teal-50/80 ring-1 ring-teal-200',
+                            dragOverDateStr === dateStr && 'ring-2 ring-teal-300 bg-teal-50/40'
+                          )}
+                          onDragOver={(e) => onDateCellDragOver(e, dateStr)}
+                          onDragLeave={() => setDragOverDateStr(null)}
+                          onDrop={(e) => onDateCellDrop(e, dateStr)}
+                        >
+                          <span
+                            className={cn(
+                              'text-sm font-medium mb-2',
+                              isToday ? 'text-teal-700' : 'text-gray-700'
+                            )}
+                          >
+                            {date.getDate()}
+                          </span>
+                          <div className="flex-1 flex flex-col gap-1 overflow-y-auto">
+                            {dayTasks.slice(0, 4).map((t) => (
+                              <DraggableTaskChip key={t.id} task={t} source="calendar" compact />
+                            ))}
+                            {dayTasks.length > 4 && (
+                              <span className="text-[9px] text-gray-400">
+                                +{dayTasks.length - 4}
+                              </span>
+                            )}
+                          </div>
+                        </div>
                       );
-                    }
+                    });
+                  })()}
+                </div>
+              ) : calendarViewMode === 'week' ? (
+                <div className="grid grid-cols-7 gap-2">
+                  {displayWeekDates.map((date) => {
                     const dateStr = toDateStr(date);
                     const dayTasks = getTasksForDate(date);
                     const isToday = dateStr === todayStr;
@@ -942,7 +1108,7 @@ export function CalendarPage({ accessToken }: CalendarPageProps) {
                       <div
                         key={dateStr}
                         className={cn(
-                          'min-h-[100px] p-2 border border-gray-100 rounded-lg flex flex-col',
+                          'min-h-[380px] p-2 border border-gray-100 rounded-lg flex flex-col',
                           isToday && 'bg-teal-50/80 ring-1 ring-teal-200',
                           dragOverDateStr === dateStr && 'ring-2 ring-teal-300 bg-teal-50/40'
                         )}
@@ -950,29 +1116,74 @@ export function CalendarPage({ accessToken }: CalendarPageProps) {
                         onDragLeave={() => setDragOverDateStr(null)}
                         onDrop={(e) => onDateCellDrop(e, dateStr)}
                       >
+                        <span className={cn('text-xs text-gray-500', isToday && 'text-teal-700')}>
+                          {WEEKDAYS[date.getDay()]}
+                        </span>
                         <span
                           className={cn(
                             'text-sm font-medium mb-2',
                             isToday ? 'text-teal-700' : 'text-gray-700'
                           )}
                         >
-                          {date.getDate()}
+                          {date.toLocaleDateString('en-US', { month: 'short', day: 'numeric' })}
                         </span>
                         <div className="flex-1 flex flex-col gap-1 overflow-y-auto">
-                          {dayTasks.slice(0, 4).map((t) => (
-                            <DraggableTaskChip key={t.id} task={t} source="calendar" compact />
-                          ))}
-                          {dayTasks.length > 4 && (
-                            <span className="text-[9px] text-gray-400">
-                              +{dayTasks.length - 4}
-                            </span>
+                          {dayTasks.length === 0 ? (
+                            <span className="text-[10px] text-gray-300">No tasks</span>
+                          ) : (
+                            dayTasks.map((t) => (
+                              <DraggableTaskChip key={t.id} task={t} source="calendar" compact />
+                            ))
                           )}
                         </div>
                       </div>
                     );
-                  });
-                })()}
-              </div>
+                  })}
+                </div>
+              ) : (
+                <div className="grid grid-cols-1">
+                  {(() => {
+                    const date = displayDayDate;
+                    const dateStr = toDateStr(date);
+                    const dayTasks = getTasksForDate(date);
+                    const isToday = dateStr === todayStr;
+                    return (
+                      <div
+                        key={dateStr}
+                        className={cn(
+                          'min-h-[520px] p-3 border border-gray-100 rounded-lg flex flex-col',
+                          isToday && 'bg-teal-50/80 ring-1 ring-teal-200',
+                          dragOverDateStr === dateStr && 'ring-2 ring-teal-300 bg-teal-50/40'
+                        )}
+                        onDragOver={(e) => onDateCellDragOver(e, dateStr)}
+                        onDragLeave={() => setDragOverDateStr(null)}
+                        onDrop={(e) => onDateCellDrop(e, dateStr)}
+                      >
+                        <span className={cn('text-xs text-gray-500', isToday && 'text-teal-700')}>
+                          {WEEKDAYS[date.getDay()]}
+                        </span>
+                        <span
+                          className={cn(
+                            'text-base font-semibold mb-3',
+                            isToday ? 'text-teal-700' : 'text-gray-800'
+                          )}
+                        >
+                          {date.toLocaleDateString('en-US', { month: 'long', day: 'numeric' })}
+                        </span>
+                        <div className="flex-1 flex flex-col gap-2 overflow-y-auto">
+                          {dayTasks.length === 0 ? (
+                            <span className="text-xs text-gray-300">No tasks</span>
+                          ) : (
+                            dayTasks.map((t) => (
+                              <DraggableTaskChip key={t.id} task={t} source="calendar" />
+                            ))
+                          )}
+                        </div>
+                      </div>
+                    );
+                  })()}
+                </div>
+              )}
             </div>
           </div>
 
