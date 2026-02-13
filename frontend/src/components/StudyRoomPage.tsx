@@ -680,9 +680,17 @@ export function StudyRoomPage({
   };
 
   const handleSendMessage = () => {
-    if (!chatInput.trim() || !socketRef.current || !socketReady) return;
+    if (!chatInput.trim() || !socketRef.current || !socketReady) {
+      console.log('[StudyRoomPage] handleSendMessage blocked', { 
+        hasInput: !!chatInput.trim(), 
+        socketReady, 
+        hasSocket: !!socketRef.current 
+      });
+      return;
+    }
     const clientId = crypto.randomUUID();
     const content = chatInput.trim();
+    console.log('[StudyRoomPage] sending message', { roomId: groupId, content });
     const tempMessage: RoomMessage = {
       id: clientId,
       clientId,
