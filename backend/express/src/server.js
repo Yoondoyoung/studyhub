@@ -954,7 +954,9 @@ app.get("/study-groups/:id/presence", async (req, res) => {
     const groupId = req.params.id;
     const group = await kvGet(`study-group:${groupId}`);
     if (!group) return res.status(404).json({ error: "Group not found" });
-    if (!group.participants?.includes(user.id)) {
+    const isParticipant = group.participants?.includes(user.id);
+    const isHost = group.hostId === user.id;
+    if (!isParticipant && !isHost) {
       return res.status(403).json({ error: "Not accepted" });
     }
     const presence = (await kvGet(`room-presence:${groupId}`)) || { users: [] };
@@ -973,7 +975,9 @@ app.get("/study-groups/:id/chat", async (req, res) => {
     if (!roomId) return res.status(400).json({ error: "Room id required" });
     const group = await kvGet(`study-group:${roomId}`);
     if (!group) return res.status(404).json({ error: "Group not found" });
-    if (!group.participants?.includes(user.id)) {
+    const isParticipant = group.participants?.includes(user.id);
+    const isHost = group.hostId === user.id;
+    if (!isParticipant && !isHost) {
       return res.status(403).json({ error: "Not accepted" });
     }
     const { messages } = await getRoomChat(roomId);
@@ -993,8 +997,12 @@ app.post("/study-groups/:id/presence", async (req, res) => {
     if (!group) return res.status(404).json({ error: "Group not found" });
     const participantIds = group.participants || [];
     const isParticipant = participantIds.includes(user.id);
-    if (!isParticipant) {
+    const isHost = group.hostId === user.id;
+    if (!isParticipant && !isHost) {
       return res.status(403).json({ error: "Not accepted" });
+    }
+    if (!isParticipant && isHost) {
+      group.participants = [...participantIds, user.id];
     }
     const profile = await kvGet(`user:${user.id}`);
     const username = profile?.username ?? profile?.email ?? user.id?.slice(0, 8) ?? "User";
@@ -1030,7 +1038,10 @@ function applyNoShowCleanup(group) {
   if (new Date() < cutoff) return false;
   const firstJoin = group.participantFirstJoinAt || {};
   const before = group.participants.length;
-  group.participants = group.participants.filter((id) => firstJoin[id] != null);
+  // Always keep host in participants so room ownership does not get invalidated.
+  group.participants = group.participants.filter(
+    (id) => id === group.hostId || firstJoin[id] != null
+  );
   return group.participants.length !== before;
 }
 
@@ -1070,6 +1081,7 @@ app.post("/study-groups", async (req, res) => {
       studyType: studyType ?? (meetingId ? "Online" : "In-person"),
       duration: duration ?? "2 hours",
       participants: [user.id],
+      participantFirstJoinAt: { [user.id]: new Date().toISOString() },
       applicants: [],
       createdAt: new Date().toISOString(),
       ...(meetingId ? { meetingId } : {}),
