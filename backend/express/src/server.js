@@ -15,6 +15,7 @@ import sharp from "sharp";
 import http from "http";
 import { WebSocketServer } from "ws";
 import { createRequire } from "module";
+import { google } from "googleapis";
 
 const require = createRequire(import.meta.url);
 const pdfParse = require("pdf-parse");
@@ -102,6 +103,189 @@ const requireUser = async (req) => {
   const token = authHeader.startsWith("Bearer ") ? authHeader.slice(7) : "";
   return getUserFromToken(token);
 };
+
+// Google Calendar Sync (OAuth2)
+const FRONTEND_URL = process.env.FRONTEND_URL ?? "http://localhost:5173";
+const GOOGLE_CLIENT_ID = process.env.GOOGLE_CLIENT_ID ?? "";
+const GOOGLE_CLIENT_SECRET = process.env.GOOGLE_CLIENT_SECRET ?? "";
+const GOOGLE_REDIRECT_URI =
+  process.env.GOOGLE_REDIRECT_URI ?? "http://localhost:8080/google/oauth/callback";
+
+const GOOGLE_SCOPES = ["https://www.googleapis.com/auth/calendar.readonly"];
+
+const googleConfigReady = () =>
+  Boolean(GOOGLE_CLIENT_ID && GOOGLE_CLIENT_SECRET && GOOGLE_REDIRECT_URI);
+
+const googleTokensKey = (userId) => `google-tokens:${userId}`;
+const googleOauthStateKey = (state) => `google-oauth-state:${state}`;
+
+const createGoogleOAuthClient = () =>
+  new google.auth.OAuth2(GOOGLE_CLIENT_ID, GOOGLE_CLIENT_SECRET, GOOGLE_REDIRECT_URI);
+
+const safeIsoDate = (value) => {
+  if (!value || typeof value !== "string") return null;
+  const d = new Date(value);
+  if (Number.isNaN(d.getTime())) return null;
+  return d.toISOString();
+};
+
+const getStoredGoogleTokens = async (userId) => {
+  const stored = await kvGet(googleTokensKey(userId));
+  return stored?.tokens ?? null;
+};
+
+const saveGoogleTokens = async (userId, nextTokens) => {
+  const existing = await kvGet(googleTokensKey(userId));
+  const prevTokens = existing?.tokens ?? {};
+  const merged = {
+    ...prevTokens,
+    ...nextTokens,
+    // Don't overwrite refresh_token with empty/undefined
+    refresh_token: nextTokens?.refresh_token || prevTokens?.refresh_token,
+  };
+  await kvSet(googleTokensKey(userId), { tokens: merged, updatedAt: new Date().toISOString() });
+  return merged;
+};
+
+app.get("/google/status", async (req, res) => {
+  try {
+    const user = await requireUser(req);
+    const tokens = await getStoredGoogleTokens(user.id);
+    const connected = Boolean(tokens?.refresh_token || tokens?.access_token);
+    return res.json({ connected });
+  } catch {
+    return res.status(401).json({ error: "Unauthorized" });
+  }
+});
+
+app.get("/google/oauth/url", async (req, res) => {
+  try {
+    if (!googleConfigReady()) {
+      return res.status(500).json({ error: "Google OAuth is not configured" });
+    }
+
+    const user = await requireUser(req);
+    const oauth2 = createGoogleOAuthClient();
+
+    const existingTokens = await getStoredGoogleTokens(user.id);
+    const needsConsent = !existingTokens?.refresh_token;
+
+    const state = crypto.randomUUID();
+    await kvSet(googleOauthStateKey(state), {
+      userId: user.id,
+      createdAt: new Date().toISOString(),
+    });
+
+    const url = oauth2.generateAuthUrl({
+      scope: GOOGLE_SCOPES,
+      access_type: "offline",
+      include_granted_scopes: true,
+      prompt: needsConsent ? "consent" : undefined,
+      state,
+    });
+
+    return res.json({ url });
+  } catch (err) {
+    if (String(err?.message).includes("Unauthorized"))
+      return res.status(401).json({ error: "Unauthorized" });
+    return res.status(500).json({ error: String(err?.message ?? err) });
+  }
+});
+
+app.get("/google/oauth/callback", async (req, res) => {
+  try {
+    if (!googleConfigReady()) {
+      return res.status(500).send("Google OAuth is not configured");
+    }
+
+    const code = req.query.code ? String(req.query.code) : "";
+    const state = req.query.state ? String(req.query.state) : "";
+    if (!code || !state) return res.status(400).send("Missing code/state");
+
+    const stateRecord = await kvGet(googleOauthStateKey(state));
+    const userId = stateRecord?.userId;
+    if (!userId) return res.status(400).send("Invalid state");
+
+    await kvDel(googleOauthStateKey(state));
+
+    const oauth2 = createGoogleOAuthClient();
+    const { tokens } = await oauth2.getToken(code);
+    await saveGoogleTokens(userId, tokens);
+
+    const redirect = `${FRONTEND_URL}/?google=connected#calendar`;
+    return res.redirect(302, redirect);
+  } catch (err) {
+    console.error("Google OAuth callback error:", err);
+    const redirect = `${FRONTEND_URL}/?google=error#calendar`;
+    return res.redirect(302, redirect);
+  }
+});
+
+app.get("/google/calendar/events", async (req, res) => {
+  try {
+    if (!googleConfigReady()) {
+      return res.status(500).json({ error: "Google OAuth is not configured" });
+    }
+
+    const user = await requireUser(req);
+    const tokens = await getStoredGoogleTokens(user.id);
+    if (!tokens) {
+      return res.status(401).json({ error: "GOOGLE_NOT_CONNECTED" });
+    }
+
+    const oauth2 = createGoogleOAuthClient();
+    oauth2.setCredentials(tokens);
+    oauth2.on("tokens", (t) => {
+      // Persist refreshed access token / expiry (and refresh_token if provided)
+      saveGoogleTokens(user.id, t).catch(() => {});
+    });
+
+    const timeMin =
+      safeIsoDate(req.query.timeMin) ??
+      new Date(Date.now() - 30 * 24 * 60 * 60 * 1000).toISOString();
+    const timeMax =
+      safeIsoDate(req.query.timeMax) ??
+      new Date(Date.now() + 60 * 24 * 60 * 60 * 1000).toISOString();
+
+    const calendar = google.calendar({ version: "v3", auth: oauth2 });
+    const events = [];
+
+    let pageToken = undefined;
+    for (let i = 0; i < 10; i++) {
+      const resp = await calendar.events.list({
+        calendarId: "primary",
+        timeMin,
+        timeMax,
+        singleEvents: true,
+        orderBy: "startTime",
+        maxResults: 2500,
+        pageToken,
+      });
+      const items = resp.data.items || [];
+      for (const e of items) {
+        if (!e || e.status === "cancelled") continue;
+        events.push({
+          id: e.id,
+          summary: e.summary,
+          description: e.description,
+          location: e.location,
+          htmlLink: e.htmlLink,
+          start: e.start,
+          end: e.end,
+        });
+      }
+      pageToken = resp.data.nextPageToken || undefined;
+      if (!pageToken) break;
+    }
+
+    return res.json({ events });
+  } catch (err) {
+    const msg = String(err?.message ?? err);
+    if (msg.includes("Unauthorized")) return res.status(401).json({ error: "Unauthorized" });
+    console.error("Google events error:", err);
+    return res.status(500).json({ error: "Failed to fetch Google Calendar events" });
+  }
+});
 
 const getConversationId = (userId, friendId) =>
   [userId, friendId].sort().join(":");
@@ -270,6 +454,172 @@ app.delete("/todos/:id", async (req, res) => {
     const user = await requireUser(req);
     const todoId = req.params.id;
     await kvDel(`todo:${user.id}:${todoId}`);
+    return res.json({ success: true });
+  } catch {
+    return res.status(401).json({ error: "Unauthorized" });
+  }
+});
+
+// Calendar tasks
+const extractFileContent = async (file) => {
+  let content = "";
+  if (file.mimetype === "application/pdf" || file.originalname.endsWith(".pdf")) {
+    const pdfData = await pdfParse(file.buffer);
+    content = pdfData.text;
+  } else if (file.mimetype.startsWith("image/")) {
+    const base64Data = file.buffer.toString("base64");
+    const response = await openai.chat.completions.create({
+      model: "gpt-4o-mini",
+      messages: [{
+        role: "user",
+        content: [
+          { type: "text", text: "Extract all text from this image. Include any task lists, deadlines, or to-do items." },
+          { type: "image_url", image_url: { url: `data:image/jpeg;base64,${base64Data}`, detail: "high" } }
+        ]
+      }],
+      max_tokens: 2000,
+    });
+    content = response.choices[0].message.content || "";
+  } else if (file.mimetype.startsWith("text/") || file.originalname.match(/\.(txt|md|doc|docx)$/i)) {
+    content = file.buffer.toString("utf-8");
+  } else {
+    throw new Error("Unsupported file type. Use PDF, image, or text files.");
+  }
+  return content;
+};
+
+app.post("/calendar/tasks/extract-from-file", upload.single("file"), async (req, res) => {
+  try {
+    const user = await requireUser(req);
+    const file = req.file;
+    if (!file) return res.status(400).json({ error: "No file uploaded" });
+
+    const content = await extractFileContent(file);
+    if (!content?.trim()) return res.status(400).json({ error: "File is empty or unreadable" });
+
+    const response = await openai.chat.completions.create({
+      model: "gpt-4o-mini",
+      messages: [
+        {
+          role: "system",
+          content: `You are a task extraction assistant. Extract tasks from the given content. Return a JSON array of objects. Each object must have: title (string), info (string - description/details), deadline (string - ISO date YYYY-MM-DD, or null if unknown), time (string - HH:MM in 24h format, or null if unknown). Use today's date (${new Date().toISOString().split("T")[0]}) as reference for relative dates. If time is mentioned (e.g. "at 3pm", "by 14:00"), include it. Respond ONLY with valid JSON array. Example: [{"title":"Submit report","info":"Quarterly report for Q1","deadline":"2025-02-15","time":"14:00"}]`
+        },
+        {
+          role: "user",
+          content: content.substring(0, 8000)
+        }
+      ],
+      max_tokens: 2000,
+    });
+
+    const raw = response.choices[0].message.content?.trim() || "[]";
+    let tasks = [];
+    try {
+      const parsed = JSON.parse(raw.replace(/```json?\s*|\s*```/g, ""));
+      tasks = Array.isArray(parsed) ? parsed : [];
+    } catch {
+      tasks = [];
+    }
+
+    const saved = [];
+    for (const t of tasks) {
+      const taskId = crypto.randomUUID();
+      const deadline = t.deadline || new Date().toISOString().split("T")[0];
+      const time = t.time && /^\d{1,2}:\d{2}$/.test(String(t.time).trim()) ? String(t.time).trim() : null;
+      const task = {
+        id: taskId,
+        userId: user.id,
+        title: String(t.title || "Untitled").trim(),
+        info: String(t.info || "").trim(),
+        deadline,
+        time: time || null,
+        completed: false,
+        completedAt: null,
+        createdAt: new Date().toISOString(),
+      };
+      await kvSet(`calendar-task:${user.id}:${taskId}`, task);
+      saved.push(task);
+    }
+
+    return res.json({ tasks: saved });
+  } catch (err) {
+    console.error("Calendar extract error:", err);
+    if (String(err?.message).includes("Unauthorized")) return res.status(401).json({ error: "Unauthorized" });
+    return res.status(500).json({ error: String(err?.message ?? err) });
+  }
+});
+
+app.get("/calendar/tasks", async (req, res) => {
+  try {
+    const user = await requireUser(req);
+    const raw = await kvGetByPrefix(`calendar-task:${user.id}:`);
+    const tasks = raw.map((t) => t).filter(Boolean);
+    return res.json({ tasks });
+  } catch {
+    return res.status(401).json({ error: "Unauthorized" });
+  }
+});
+
+app.post("/calendar/tasks", async (req, res) => {
+  try {
+    const user = await requireUser(req);
+    const { title, info, deadline, time } = req.body ?? {};
+    const taskId = crypto.randomUUID();
+    const dateStr = deadline || new Date().toISOString().split("T")[0];
+    const timeStr = time && /^\d{1,2}:\d{2}$/.test(String(time).trim()) ? String(time).trim() : null;
+    const task = {
+      id: taskId,
+      userId: user.id,
+      title: String(title || "Untitled").trim(),
+      info: String(info || "").trim(),
+      deadline: dateStr,
+      time: timeStr,
+      completed: false,
+      completedAt: null,
+      createdAt: new Date().toISOString(),
+    };
+    await kvSet(`calendar-task:${user.id}:${taskId}`, task);
+    return res.json({ task });
+  } catch {
+    return res.status(401).json({ error: "Unauthorized" });
+  }
+});
+
+app.put("/calendar/tasks/:id", async (req, res) => {
+  try {
+    const user = await requireUser(req);
+    const taskId = req.params.id;
+    const existing = await kvGet(`calendar-task:${user.id}:${taskId}`);
+    if (!existing) return res.status(404).json({ error: "Task not found" });
+    const { title, info, deadline, time, completed } = req.body ?? {};
+    const timeStr = time !== undefined
+      ? (time && /^\d{1,2}:\d{2}$/.test(String(time).trim()) ? String(time).trim() : null)
+      : existing.time;
+    const isComplete = completed !== undefined ? Boolean(completed) : existing.completed;
+    const completedAt = isComplete
+      ? (existing.completedAt || new Date().toISOString())
+      : null;
+    const updated = {
+      ...existing,
+      title: title !== undefined ? String(title).trim() : existing.title,
+      info: info !== undefined ? String(info).trim() : existing.info,
+      deadline: deadline !== undefined ? String(deadline) : existing.deadline,
+      time: timeStr,
+      completed: isComplete,
+      completedAt,
+    };
+    await kvSet(`calendar-task:${user.id}:${taskId}`, updated);
+    return res.json({ task: updated });
+  } catch {
+    return res.status(401).json({ error: "Unauthorized" });
+  }
+});
+
+app.delete("/calendar/tasks/:id", async (req, res) => {
+  try {
+    const user = await requireUser(req);
+    const taskId = req.params.id;
+    await kvDel(`calendar-task:${user.id}:${taskId}`);
     return res.json({ success: true });
   } catch {
     return res.status(401).json({ error: "Unauthorized" });

@@ -1,4 +1,3 @@
-import { apiBase } from '../utils/api';
 "use client";
 
 import * as React from "react";
