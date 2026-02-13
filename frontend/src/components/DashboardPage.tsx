@@ -47,14 +47,16 @@ interface OutgoingFriendRequest {
   recipient: Friend;
 }
 
-interface StudyRoom {
+type UpcomingSource = 'local' | 'google';
+
+interface UpcomingItem {
   id: string;
-  topic: string;
-  location: string;
-  time: string;
-  participants: number;
-  maxParticipants: number;
-  icon?: string;
+  title: string;
+  info?: string;
+  date: string; // YYYY-MM-DD
+  time?: string | null; // HH:MM (optional)
+  source: UpcomingSource;
+  url?: string | null;
 }
 
 interface DashboardCache {
@@ -66,7 +68,7 @@ interface DashboardCache {
   weeklyGoal: number;
   monthlyGoal: number;
   friends: Friend[];
-  nearbyRooms: StudyRoom[];
+  upcoming7: UpcomingItem[];
   studyStreak: { day: string; completed: boolean }[];
   heatmapData: Record<string, number>;
   cachedDateKey?: string;
@@ -94,7 +96,7 @@ export function DashboardPage({ accessToken, onOpenChat, onViewFriend }: Dashboa
   const [goalTimeInput, setGoalTimeInput] = useState('00:00');
 
   const [friends, setFriends] = useState<Friend[]>([]);
-  const [nearbyRooms, setNearbyRooms] = useState<StudyRoom[]>([]);
+  const [upcoming7, setUpcoming7] = useState<UpcomingItem[]>([]);
   const [studyStreak, setStudyStreak] = useState<{ day: string; completed: boolean }[]>([]);
   const [isFriendsExpanded, setIsFriendsExpanded] = useState(false);
   const [showFullFriendList, setShowFullFriendList] = useState(false);
@@ -162,7 +164,7 @@ export function DashboardPage({ accessToken, onOpenChat, onViewFriend }: Dashboa
           setWeeklyGoal(Number(cached.weeklyGoal || 0));
           setMonthlyGoal(Number(cached.monthlyGoal || 0));
           setFriends(cached.friends || []);
-          setNearbyRooms(cached.nearbyRooms || []);
+          setUpcoming7(cached.upcoming7 || []);
           setStudyStreak(cached.studyStreak || []);
           setHeatmapData(cached.heatmapData || {});
           hasCache = true;
@@ -178,7 +180,7 @@ export function DashboardPage({ accessToken, onOpenChat, onViewFriend }: Dashboa
         fetchStudyTimeSummary(),
         fetchGoals(),
         fetchFriendsList(),
-        fetchStudyGroups(),
+        fetchUpcoming7Days(),
       ]);
       if (!cancelled) setIsInitialLoading(false);
     };
@@ -199,7 +201,7 @@ export function DashboardPage({ accessToken, onOpenChat, onViewFriend }: Dashboa
       weeklyGoal,
       monthlyGoal,
       friends,
-      nearbyRooms,
+      upcoming7,
       studyStreak,
       heatmapData,
       cachedDateKey: toLocalDateKey(new Date()),
@@ -216,7 +218,7 @@ export function DashboardPage({ accessToken, onOpenChat, onViewFriend }: Dashboa
     weeklyGoal,
     monthlyGoal,
     friends,
-    nearbyRooms,
+    upcoming7,
     studyStreak,
     heatmapData,
   ]);
@@ -242,6 +244,101 @@ export function DashboardPage({ accessToken, onOpenChat, onViewFriend }: Dashboa
       }
     };
   }, []);
+
+  const toHHMM = (dt: Date) => {
+    const hh = String(dt.getHours()).padStart(2, '0');
+    const mm = String(dt.getMinutes()).padStart(2, '0');
+    return `${hh}:${mm}`;
+  };
+
+  const getNext7Days = () => {
+    const result: string[] = [];
+    for (let i = 0; i < 7; i++) {
+      const d = new Date();
+      d.setHours(0, 0, 0, 0);
+      d.setDate(d.getDate() + i);
+      result.push(toLocalDateKey(d));
+    }
+    return result;
+  };
+
+  const fetchUpcoming7Days = async () => {
+    try {
+      const upcomingDates = getNext7Days();
+      const upcomingDateSet = new Set(upcomingDates);
+
+      // Local calendar tasks
+      const localRes = await fetch(`${apiBase}/calendar/tasks`, {
+        headers: { Authorization: `Bearer ${accessToken}` }
+      });
+      const localData = await localRes.json().catch(() => ({}));
+      const localTasksRaw: any[] = Array.isArray(localData?.tasks) ? localData.tasks : [];
+      const localItems: UpcomingItem[] = localTasksRaw
+        .filter((t) => !t?.completed && upcomingDateSet.has(String(t?.deadline || '')))
+        .map((t) => ({
+          id: String(t.id),
+          title: String(t.title || t.name || 'Task'),
+          info: String(t.info || ''),
+          date: String(t.deadline),
+          time: t.time ? String(t.time) : null,
+          source: 'local' as const,
+          url: null,
+        }));
+
+      // Google events (optional)
+      let googleItems: UpcomingItem[] = [];
+      try {
+        const statusRes = await fetch(`${apiBase}/google/status`, {
+          headers: { Authorization: `Bearer ${accessToken}` }
+        });
+        const statusData = await statusRes.json().catch(() => ({}));
+        const connected = Boolean(statusData?.connected);
+        if (connected) {
+          const timeMin = new Date().toISOString();
+          const timeMax = new Date(Date.now() + 7 * 24 * 60 * 60 * 1000).toISOString();
+          const eventsRes = await fetch(
+            `${apiBase}/google/calendar/events?timeMin=${encodeURIComponent(timeMin)}&timeMax=${encodeURIComponent(timeMax)}`,
+            { headers: { Authorization: `Bearer ${accessToken}` } }
+          );
+          const eventsData = await eventsRes.json().catch(() => ({}));
+          const events: any[] = Array.isArray(eventsData?.events) ? eventsData.events : [];
+          googleItems = events
+            .map((e) => {
+              const start = e?.start || {};
+              const startRaw = start?.dateTime || start?.date || null;
+              if (!startRaw) return null;
+              const isAllDay = Boolean(start?.date && !start?.dateTime);
+              const startDate = new Date(String(startRaw));
+              if (Number.isNaN(startDate.getTime())) return null;
+              const dateKey = isAllDay ? String(start?.date) : toLocalDateKey(startDate);
+              if (!upcomingDateSet.has(dateKey)) return null;
+              return {
+                id: e?.id ? `gcal:${String(e.id)}` : `gcal:${crypto.randomUUID()}`,
+                title: String(e?.summary || 'Google event'),
+                info: [e?.location, e?.description].filter(Boolean).map(String).join(' • '),
+                date: dateKey,
+                time: isAllDay ? null : toHHMM(startDate),
+                source: 'google' as const,
+                url: e?.htmlLink ? String(e.htmlLink) : null,
+              } satisfies UpcomingItem;
+            })
+            .filter(Boolean) as UpcomingItem[];
+        }
+      } catch {
+        // ignore google failures on dashboard
+      }
+
+      const combined = [...localItems, ...googleItems];
+      combined.sort((a, b) => {
+        const cmp = a.date.localeCompare(b.date);
+        if (cmp !== 0) return cmp;
+        return String(a.time || '99:99').localeCompare(String(b.time || '99:99'));
+      });
+      setUpcoming7(combined);
+    } catch (error) {
+      console.error('Failed to fetch upcoming tasks:', error);
+    }
+  };
 
   const toggleFriendsCard = () => {
     if (collapseFriendsTimerRef.current) {
@@ -518,16 +615,6 @@ export function DashboardPage({ accessToken, onOpenChat, onViewFriend }: Dashboa
       toast.error(`Failed to ${action} request`);
     } finally {
       setRequestActionUserId(null);
-    }
-  };
-
-  const fetchStudyGroups = async () => {
-    try {
-      const response = await fetch(`${apiBase}/study-groups`);
-      const data = await response.json();
-      setNearbyRooms(data.groups || []);
-    } catch (error) {
-      console.error('Failed to fetch study groups:', error);
     }
   };
 
@@ -1570,38 +1657,79 @@ export function DashboardPage({ accessToken, onOpenChat, onViewFriend }: Dashboa
             </Dialog>
           </div>
 
-        <div className="xl:col-span-4 h-full">
+        <div className="xl:col-span-4 flex min-h-0">
           <div
-            className={`rounded-[36px] bg-white/60 shadow-[0_30px_80px_rgba(15,23,42,0.08)] p-3 h-full flex flex-col overflow-hidden ${
+            className={`rounded-[36px] bg-white/60 shadow-[0_30px_80px_rgba(15,23,42,0.08)] p-3 flex-1 flex flex-col overflow-hidden ${
               isFriendsExpanded ? 'gap-3' : 'gap-3'
             }`}
           >
             <div
-              className={`overflow-hidden transition-all duration-1000 ease-in-out ${
+              className={`overflow-hidden rounded-3xl shadow-[0_20px_60px_rgba(15,23,42,0.08)] transition-all duration-1000 ease-in-out ${
                 isFriendsExpanded
                   ? 'max-h-0 opacity-0 -translate-y-8 pointer-events-none'
-                  : 'max-h-[280px] opacity-100 translate-y-0'
+                  : 'max-h-[310px] min-h-[310px] opacity-100 translate-y-0'
               }`}
             >
-              <div className="bg-white/90 rounded-3xl shadow-[0_20px_60px_rgba(15,23,42,0.08)] p-5">
-              <h3 className="text-base font-semibold text-gray-900 mb-4">Nearby Study Rooms</h3>
-              {nearbyRooms.length === 0 ? (
-                <p className="text-xs text-gray-400">No study rooms nearby yet.</p>
-              ) : (
-                <div className="space-y-3">
-                  {nearbyRooms.slice(0, 3).map((room) => (
-                    <button
-                      key={room.id}
-                      className="w-full flex items-center gap-3 px-3 py-2 bg-gray-100/70 rounded-full hover:bg-gray-100 transition-colors text-left"
-                    >
-                      <div className="size-9 bg-white rounded-full flex items-center justify-center text-base shadow-sm ring-4 ring-white/80">
-                        {room.icon || '📚'}
-                      </div>
-                      <span className="text-xs font-medium text-gray-900">{room.topic}</span>
-                    </button>
-                  ))}
+              <div className="bg-white/90 rounded-3xl p-5 h-full flex flex-col">
+                <div className="flex items-center justify-between mb-4 shrink-0">
+                  <h3 className="text-base font-semibold text-gray-900">Upcoming 7 days</h3>
+                  <button
+                    type="button"
+                    className="text-xs text-gray-400 hover:text-gray-600"
+                    onClick={() => {
+                      fetchUpcoming7Days();
+                    }}
+                    title="Refresh"
+                  >
+                    Refresh
+                  </button>
                 </div>
-              )}
+
+                <div className="flex-1 min-h-0 overflow-y-auto pr-1">
+                  {upcoming7.length === 0 ? (
+                    <div className="h-full flex items-center justify-center">
+                      <p className="text-xs text-gray-400">No tasks in the next 7 days.</p>
+                    </div>
+                  ) : (
+                    <div className="space-y-2">
+                      {upcoming7.slice(0, 6).map((item) => (
+                        <button
+                          key={item.id}
+                          type="button"
+                          className="w-full flex items-center gap-3 px-3 py-2 bg-gray-100/70 rounded-full hover:bg-gray-100 transition-colors text-left"
+                          onClick={() => {
+                            // Go to calendar for full details
+                            window.location.hash = 'calendar';
+                          }}
+                          title="Open calendar"
+                        >
+                          <div className="min-w-[72px] text-[10px] font-semibold text-gray-600">
+                            {item.date.slice(5)}{item.time ? ` ${item.time}` : ''}
+                          </div>
+                          <span className="text-xs font-medium text-gray-900 truncate flex-1">
+                            {item.title}
+                          </span>
+                          <span className={`text-[10px] font-semibold px-2 py-1 rounded-full ${
+                            item.source === 'google' ? 'bg-sky-100 text-sky-700' : 'bg-teal-100 text-teal-700'
+                          }`}>
+                            {item.source === 'google' ? 'Google' : 'Local'}
+                          </span>
+                        </button>
+                      ))}
+                      {upcoming7.length > 6 ? (
+                        <button
+                          type="button"
+                          className="w-full text-center text-xs text-gray-400 hover:text-gray-600 pt-1"
+                          onClick={() => {
+                            window.location.hash = 'calendar';
+                          }}
+                        >
+                          +{upcoming7.length - 6} more
+                        </button>
+                      ) : null}
+                    </div>
+                  )}
+                </div>
               </div>
             </div>
 
@@ -1808,13 +1936,13 @@ export function DashboardPage({ accessToken, onOpenChat, onViewFriend }: Dashboa
             </div>
 
             <div
-              className={`overflow-hidden transition-all duration-500 ease-in-out ${
+              className={`overflow-hidden rounded-3xl shadow-[0_20px_60px_rgba(15,23,42,0.08)] transition-all duration-500 ease-in-out ${
                 isFriendsExpanded
                   ? 'max-h-0 opacity-0 translate-y-8 pointer-events-none'
                   : 'max-h-[220px] opacity-100 translate-y-0'
               }`}
             >
-              <div className="bg-white/90 rounded-3xl shadow-[0_20px_60px_rgba(15,23,42,0.08)] p-4">
+              <div className="bg-white/90 rounded-3xl p-4">
                 <h3 className="text-base font-semibold text-gray-900 mb-4">Study Streak</h3>
                 <div className="flex items-center justify-between">
                   {studyStreak.map((day, index) => (
