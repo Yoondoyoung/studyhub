@@ -7,7 +7,6 @@ import { StudyGroupsPage } from './components/StudyGroupsPage';
 import { SoloStudyPage } from './components/SoloStudyPage';
 import { FriendsPage } from './components/FriendsPage';
 import { FriendDetailPage } from './components/FriendDetailPage';
-import { SettingsPage } from './components/SettingsPage';
 import { ProfilePage } from './components/ProfilePage';
 import { StudyRoomPage } from './components/StudyRoomPage';
 import { MeetingPage } from './components/MeetingPage';
@@ -22,7 +21,6 @@ import {
   Users, 
   BookOpen, 
   UserCircle, 
-  Settings, 
   LogOut,
   GraduationCap,
   MoreVertical,
@@ -59,9 +57,9 @@ const StudyGroupIcon = ({ className }: { className?: string }) => (
 );
 import { toast } from 'sonner';
 
-type Page = 'login' | 'register' | 'dashboard' | 'study-groups' | 'solo-study' | 'friends' | 'settings' | 'profile' | 'friend-detail' | 'room' | 'meeting' | 'calendar';
+type Page = 'login' | 'register' | 'dashboard' | 'study-groups' | 'solo-study' | 'friends' | 'profile' | 'friend-detail' | 'room' | 'meeting' | 'calendar';
 
-const APP_PAGES: Page[] = ['dashboard', 'study-groups', 'solo-study', 'friends', 'calendar', 'settings'];
+const APP_PAGES: Page[] = ['dashboard', 'study-groups', 'solo-study', 'friends', 'calendar'];
 
 function getPageFromHash(): Page {
   const hash = window.location.hash.slice(1);
@@ -1068,17 +1066,6 @@ export default function App() {
             <UserCircle className="size-5" />
           </button>
           <button
-            onClick={() => navigateTo('settings')}
-            className={`size-10 rounded-full flex items-center justify-center transition-colors ${
-              currentPage === 'settings'
-                ? 'bg-black text-white'
-                : 'bg-white text-gray-500 hover:bg-gray-100'
-            }`}
-            title="Settings"
-          >
-            <Settings className="size-4" />
-          </button>
-          <button
             onClick={handleLogout}
             className="size-10 rounded-full flex items-center justify-center bg-white text-gray-400 hover:bg-gray-100"
             title="Log out"
@@ -1161,16 +1148,14 @@ export default function App() {
           {currentPage === 'calendar' && (
             <CalendarPage accessToken={accessToken} />
           )}
-          {currentPage === 'settings' && (
-            <SettingsPage
-              accessToken={accessToken}
+          {currentPage === 'profile' && user && (
+            <ProfilePage 
+              accessToken={accessToken} 
+              user={user}
               onProfileUpdate={(nextProfile) =>
                 setUser((prev) => (prev ? { ...prev, ...nextProfile } : prev))
               }
             />
-          )}
-          {currentPage === 'profile' && user && (
-            <ProfilePage accessToken={accessToken} user={user} />
           )}
           {currentPage === 'friend-detail' && selectedFriend && (
             <FriendDetailPage
