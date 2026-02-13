@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import { apiBase } from './utils/api';
 import { LoginPage } from './components/LoginPage';
 import { RegisterPage, RegisterData } from './components/RegisterPage';
@@ -10,7 +10,11 @@ import { FriendDetailPage } from './components/FriendDetailPage';
 import { SettingsPage } from './components/SettingsPage';
 import { ProfilePage } from './components/ProfilePage';
 import { StudyRoomPage } from './components/StudyRoomPage';
+import { MeetingPage } from './components/MeetingPage';
 import { Toaster } from './components/ui/sonner';
+import { Button } from './components/ui/button';
+import { Input } from './components/ui/input';
+import { Avatar, AvatarFallback, AvatarImage } from './components/ui/avatar';
 import { 
   LayoutDashboard, 
   Users, 
@@ -24,13 +28,14 @@ import {
 } from 'lucide-react';
 import { toast } from 'sonner';
 
-type Page = 'login' | 'register' | 'dashboard' | 'study-groups' | 'solo-study' | 'friends' | 'settings' | 'profile' | 'friend-detail' | 'room';
+type Page = 'login' | 'register' | 'dashboard' | 'study-groups' | 'solo-study' | 'friends' | 'settings' | 'profile' | 'friend-detail' | 'room' | 'meeting';
 
 const APP_PAGES: Page[] = ['dashboard', 'study-groups', 'solo-study', 'friends', 'settings'];
 
 function getPageFromHash(): Page {
   const hash = window.location.hash.slice(1);
   if (hash.startsWith('room-')) return 'room';
+  if (hash.startsWith('meeting-')) return 'meeting';
   if (APP_PAGES.includes(hash as Page)) return hash as Page;
   return 'dashboard';
 }
@@ -38,6 +43,12 @@ function getPageFromHash(): Page {
 function getGroupIdFromHash(): string | null {
   const hash = window.location.hash.slice(1);
   if (hash.startsWith('room-')) return hash.slice(5);
+  return null;
+}
+
+function getMeetingIdFromHash(): string | null {
+  const hash = window.location.hash.slice(1);
+  if (hash.startsWith('meeting-')) return hash.slice(8);
   return null;
 }
 
@@ -52,10 +63,21 @@ interface User {
 
 interface Friend {
   id: string;
-  username: string;
-  email: string;
-  category: string;
+  username?: string;
+  email?: string;
+  category?: string;
   profileImageUrl?: string;
+  lastActivityAt?: string | null;
+}
+
+interface ChatMessage {
+  id: string;
+  clientId?: string | null;
+  senderId: string;
+  recipientId: string;
+  content: string;
+  createdAt: string;
+  pending?: boolean;
 }
 
 interface StudySession {
@@ -79,6 +101,31 @@ export default function App() {
   const [selectedSessionId, setSelectedSessionId] = useState<string | null>(null);
   const [deletingSessionId, setDeletingSessionId] = useState<string | null>(null);
   const [roomUserIsIn, setRoomUserIsIn] = useState<string | null>(null);
+  const [friends, setFriends] = useState<Friend[]>([]);
+
+  const [chatFriend, setChatFriend] = useState<Friend | null>(null);
+  const [chatInput, setChatInput] = useState('');
+  const [chatLoading, setChatLoading] = useState(false);
+  const [chatMessagesByFriend, setChatMessagesByFriend] = useState<Record<string, ChatMessage[]>>({});
+  const [socketReady, setSocketReady] = useState(false);
+  const [chatPanelOpen, setChatPanelOpen] = useState(false);
+  const [recentChatFriends, setRecentChatFriends] = useState<Friend[]>([]);
+  const [chatNotifications, setChatNotifications] = useState<Record<string, boolean>>({});
+  const socketRef = useRef<WebSocket | null>(null);
+  const friendsRef = useRef<Friend[]>([]);
+  const chatFriendRef = useRef<Friend | null>(null);
+  const chatPanelOpenRef = useRef(false);
+  const chatScrollRef = useRef<HTMLDivElement | null>(null);
+  const chatAutoScrollRef = useRef(true);
+  const [currentMeetingId, setCurrentMeetingId] = useState<string | null>(null);
+  const [inMeeting, setInMeeting] = useState(false);
+  const [zoomPopupPos, setZoomPopupPos] = useState({ x: 24, y: 24 });
+  const [zoomPopupSize, setZoomPopupSize] = useState({ width: 360, height: 280 });
+  const zoomDragRef = useRef({ isDragging: false, startX: 0, startY: 0, startLeft: 0, startTop: 0 });
+  const zoomResizeRef = useRef({ isResizing: false, startX: 0, startY: 0, startW: 0, startH: 0 });
+  const zoomContainerRef = useRef<HTMLDivElement>(null);
+  const zoomClientRef = useRef<unknown>(null);
+  const zoomMeetingIdRef = useRef<string | null>(null);
 
   useEffect(() => {
     checkSession();
@@ -95,8 +142,10 @@ export default function App() {
     const syncHash = () => {
       const page = getPageFromHash();
       const gid = page === 'room' ? getGroupIdFromHash() : null;
+      const mid = page === 'meeting' ? getMeetingIdFromHash() : null;
       setCurrentPage(page);
       setCurrentGroupId(gid);
+      setCurrentMeetingId(mid);
       if (page === 'room' && gid) setRoomUserIsIn(gid);
     };
     syncHash();
@@ -105,10 +154,11 @@ export default function App() {
   }, [accessToken]);
 
   const navigateTo = (page: Page) => {
-    if (page === 'room') return;
+    if (page === 'room' || page === 'meeting') return;
     if (APP_PAGES.includes(page)) window.location.hash = page;
     setCurrentPage(page);
     setCurrentGroupId(null);
+    setCurrentMeetingId(null);
   };
 
   const navigateToRoom = (groupId: string) => {
@@ -117,6 +167,117 @@ export default function App() {
     setCurrentGroupId(groupId);
     setRoomUserIsIn(groupId);
   };
+
+  const navigateToMeeting = (meetingId: string) => {
+    window.location.hash = `meeting-${meetingId}`;
+    setCurrentPage('meeting');
+    setCurrentMeetingId(meetingId);
+  };
+
+  const handleMeetingJoined = (client: unknown) => {
+    zoomClientRef.current = client;
+    zoomMeetingIdRef.current = currentMeetingId;
+    setInMeeting(true);
+    const c = client as { on?: (event: string, cb: (payload: { state?: string }) => void) => void };
+    if (typeof c?.on === 'function') {
+      c.on('connection-change', (payload) => {
+        if (payload?.state === 'Closed') {
+          zoomClientRef.current = null;
+          zoomMeetingIdRef.current = null;
+          setInMeeting(false);
+        }
+      });
+    }
+  };
+
+  const handleLeaveFloatingMeeting = async () => {
+    try {
+      const client = zoomClientRef.current as { leaveMeeting?: (opts?: { confirm?: boolean }) => Promise<unknown> } | null;
+      if (client?.leaveMeeting) await client.leaveMeeting({ confirm: false });
+      const ZoomMtgEmbedded = (await import('@zoom/meetingsdk/embedded')).default;
+      ZoomMtgEmbedded.destroyClient?.();
+    } catch {
+      // ignore
+    } finally {
+      zoomClientRef.current = null;
+      zoomMeetingIdRef.current = null;
+      setInMeeting(false);
+      if (currentPage === 'meeting') navigateTo('dashboard');
+    }
+  };
+
+  const ZOOM_POPUP_PADDING = 24;
+  const ZOOM_POPUP_MIN_WIDTH = 280;
+  const ZOOM_POPUP_MIN_HEIGHT = 200;
+  const ZOOM_POPUP_MAX_WIDTH = 720;
+  const ZOOM_POPUP_MAX_HEIGHT = 560;
+
+  useEffect(() => {
+    if (inMeeting && currentPage !== 'meeting') {
+      setZoomPopupPos({
+        x: window.innerWidth - zoomPopupSize.width - ZOOM_POPUP_PADDING,
+        y: window.innerHeight - zoomPopupSize.height - ZOOM_POPUP_PADDING,
+      });
+    }
+  }, [inMeeting, currentPage]);
+
+  const onZoomPopupMouseDown = (e: React.MouseEvent) => {
+    if ((e.target as HTMLElement).closest('button') || (e.target as HTMLElement).closest('[data-resize-handle]')) return;
+    zoomDragRef.current = {
+      isDragging: true,
+      startX: e.clientX,
+      startY: e.clientY,
+      startLeft: zoomPopupPos.x,
+      startTop: zoomPopupPos.y,
+    };
+  };
+
+  const onZoomPopupResizeMouseDown = (e: React.MouseEvent) => {
+    e.preventDefault();
+    e.stopPropagation();
+    zoomResizeRef.current = {
+      isResizing: true,
+      startX: e.clientX,
+      startY: e.clientY,
+      startW: zoomPopupSize.width,
+      startH: zoomPopupSize.height,
+    };
+  };
+
+  useEffect(() => {
+    if (!inMeeting) return;
+    const onMove = (e: MouseEvent) => {
+      if (zoomResizeRef.current.isResizing) {
+        const dw = e.clientX - zoomResizeRef.current.startX;
+        const dh = e.clientY - zoomResizeRef.current.startY;
+        setZoomPopupSize({
+          width: Math.min(ZOOM_POPUP_MAX_WIDTH, Math.max(ZOOM_POPUP_MIN_WIDTH, zoomResizeRef.current.startW + dw)),
+          height: Math.min(ZOOM_POPUP_MAX_HEIGHT, Math.max(ZOOM_POPUP_MIN_HEIGHT, zoomResizeRef.current.startH + dh)),
+        });
+        return;
+      }
+      if (!zoomDragRef.current.isDragging) return;
+      const dx = e.clientX - zoomDragRef.current.startX;
+      const dy = e.clientY - zoomDragRef.current.startY;
+      setZoomPopupPos({
+        x: Math.max(0, zoomDragRef.current.startLeft + dx),
+        y: Math.max(0, zoomDragRef.current.startTop + dy),
+      });
+    };
+    const onUp = () => {
+      zoomDragRef.current.isDragging = false;
+      zoomResizeRef.current.isResizing = false;
+    };
+    window.addEventListener('mousemove', onMove);
+    window.addEventListener('mouseup', onUp);
+    return () => {
+      window.removeEventListener('mousemove', onMove);
+      window.removeEventListener('mouseup', onUp);
+    };
+  }, [inMeeting]);
+
+  const popupW = zoomPopupSize.width;
+  const popupH = zoomPopupSize.height;
 
   const checkSession = async () => {
     const savedToken = localStorage.getItem('accessToken');
@@ -250,6 +411,102 @@ export default function App() {
     navigateTo('solo-study');
   };
 
+  const getActivityStatus = (friend: Friend) => {
+    if (!friend.lastActivityAt) {
+      return { label: 'Inactive', isOnline: false };
+    }
+    const last = new Date(friend.lastActivityAt).getTime();
+    if (Number.isNaN(last)) {
+      return { label: 'Inactive', isOnline: false };
+    }
+    const diffSeconds = Math.floor((Date.now() - last) / 1000);
+    if (diffSeconds < 300) {
+      return { label: 'Online', isOnline: true };
+    }
+    return { label: 'Offline', isOnline: false };
+  };
+
+  const getChatMessages = (friendId: string) => chatMessagesByFriend[friendId] || [];
+
+  const upsertChatMessage = (friendId: string, message: ChatMessage) => {
+    setChatMessagesByFriend((prev) => {
+      const existing = prev[friendId] || [];
+      if (message.clientId) {
+        const index = existing.findIndex((item) => item.clientId === message.clientId);
+        if (index !== -1) {
+          const next = [...existing];
+          next[index] = { ...message, pending: false };
+          return { ...prev, [friendId]: next };
+        }
+      }
+      return { ...prev, [friendId]: [...existing, message] };
+    });
+  };
+
+  const loadChatHistory = async (friend: Friend) => {
+    setChatLoading(true);
+    try {
+      const response = await fetch(`${apiBase}/dm/${friend.id}`, {
+        headers: { Authorization: `Bearer ${accessToken}` }
+      });
+      const data = await response.json();
+      setChatMessagesByFriend((prev) => ({
+        ...prev,
+        [friend.id]: Array.isArray(data.messages) ? data.messages : []
+      }));
+    } catch (error) {
+      console.error('Failed to fetch chat history:', error);
+    } finally {
+      setChatLoading(false);
+    }
+  };
+
+  const handleOpenChat = (friend: Friend) => {
+    setChatFriend(friend);
+    setChatPanelOpen(true);
+    setRecentChatFriends((prev) => {
+      const next = [friend, ...prev.filter((item) => item.id !== friend.id)];
+      return next.slice(0, 3);
+    });
+    setChatNotifications((prev) => ({ ...prev, [friend.id]: false }));
+    loadChatHistory(friend);
+  };
+
+  const handleEndChat = () => {
+    if (chatFriend) {
+      setRecentChatFriends((prev) => prev.filter((item) => item.id !== chatFriend.id));
+      setChatNotifications((prev) => ({ ...prev, [chatFriend.id]: false }));
+    }
+    setChatPanelOpen(false);
+    setChatFriend(null);
+    setChatInput('');
+  };
+
+  const handleSendChat = () => {
+    if (!chatFriend || !chatInput.trim() || !socketRef.current || !socketReady || !user?.id) return;
+    const clientId = crypto.randomUUID();
+    const content = chatInput.trim();
+    const tempMessage: ChatMessage = {
+      id: clientId,
+      clientId,
+      senderId: user.id,
+      recipientId: chatFriend.id,
+      content,
+      createdAt: new Date().toISOString(),
+      pending: true
+    };
+    upsertChatMessage(chatFriend.id, tempMessage);
+    socketRef.current.send(
+      JSON.stringify({
+        type: 'chat:send',
+        recipientId: chatFriend.id,
+        content,
+        clientId
+      })
+    );
+    setChatInput('');
+  };
+
   const handleSessionSelect = (sessionId: string) => {
     setSelectedSessionId(sessionId);
     setShowAiStudyDropdown(false);
@@ -302,6 +559,98 @@ export default function App() {
       loadAiStudySessions();
     }
   }, [accessToken]);
+
+  useEffect(() => {
+    if (!accessToken) return;
+    const fetchFriends = async () => {
+      try {
+        const response = await fetch(`${apiBase}/friends`, {
+          headers: { Authorization: `Bearer ${accessToken}` }
+        });
+        const data = await response.json();
+        setFriends(data.friends || []);
+      } catch (error) {
+        console.error('Failed to fetch friends:', error);
+      }
+    };
+    fetchFriends();
+  }, [accessToken]);
+
+  useEffect(() => {
+    friendsRef.current = friends;
+  }, [friends]);
+
+  useEffect(() => {
+    chatFriendRef.current = chatFriend;
+  }, [chatFriend]);
+
+  useEffect(() => {
+    chatPanelOpenRef.current = chatPanelOpen;
+  }, [chatPanelOpen]);
+
+  useEffect(() => {
+    if (!accessToken || !user?.id) return;
+    const socket = new WebSocket(`${apiBase.replace(/^http/, 'ws')}/ws?token=${encodeURIComponent(accessToken)}`);
+    socketRef.current = socket;
+    setSocketReady(false);
+
+    socket.onopen = () => {
+      setSocketReady(true);
+    };
+
+    socket.onclose = () => {
+      setSocketReady(false);
+    };
+
+    socket.onmessage = (event) => {
+      try {
+        const payload = JSON.parse(event.data);
+        if (payload?.type !== 'chat:message' || !payload?.message) return;
+        const message = payload.message as ChatMessage;
+        const friendId =
+          message.senderId === user.id ? message.recipientId : message.senderId;
+        upsertChatMessage(friendId, message);
+        if (message.senderId !== user.id) {
+          const activeFriendId = chatFriendRef.current?.id;
+          const isChatOpen = chatPanelOpenRef.current;
+          if (!isChatOpen || activeFriendId !== friendId) {
+            const friendInfo =
+              friendsRef.current.find((friend) => friend.id === friendId) ||
+              chatFriendRef.current ||
+              {
+                id: friendId,
+                username: 'Friend',
+                email: '',
+                category: '',
+                lastActivityAt: null,
+                profileImageUrl: ''
+              };
+            setRecentChatFriends((prev) => {
+              const next = [friendInfo as Friend, ...prev.filter((item) => item.id !== friendId)];
+              return next.slice(0, 3);
+            });
+            setChatNotifications((prev) => ({ ...prev, [friendId]: true }));
+          }
+        }
+      } catch (error) {
+        console.error('Failed to parse chat message:', error);
+      }
+    };
+
+    return () => {
+      socket.close();
+      socketRef.current = null;
+    };
+  }, [accessToken, user?.id]);
+
+  useEffect(() => {
+    if (!chatFriend || !chatPanelOpen) return;
+    const container = chatScrollRef.current;
+    if (!container) return;
+    if (chatAutoScrollRef.current) {
+      container.scrollTop = container.scrollHeight;
+    }
+  }, [chatMessagesByFriend, chatFriend, chatPanelOpen]);
 
   if (!sessionChecked) {
     return (
@@ -481,11 +830,15 @@ export default function App() {
         )}
 
         <main className="max-w-6xl mx-auto">
+          <div className="mb-6">
+            <h1 className="text-3xl font-semibold text-gray-900">
+              Hi {user?.username || user?.email || 'there'},
+            </h1>
+          </div>
           {currentPage === 'dashboard' && (
             <DashboardPage
               accessToken={accessToken}
-              userName={user?.username || user?.email}
-              currentUserId={user?.id || ''}
+              onOpenChat={handleOpenChat}
             />
           )}
           {currentPage === 'study-groups' && (
@@ -495,6 +848,7 @@ export default function App() {
               currentUserUsername={user?.username}
               roomUserIsIn={roomUserIsIn}
               onJoinRoom={navigateToRoom}
+              onJoinMeeting={navigateToMeeting}
             />
           )}
           {currentPage === 'room' && currentGroupId && (
@@ -504,6 +858,16 @@ export default function App() {
               currentUserId={user?.id || ''}
               onBack={() => navigateTo('study-groups')}
               onLeaveRoom={() => setRoomUserIsIn(null)}
+            />
+          )}
+          {currentPage === 'meeting' && currentMeetingId && (
+            <MeetingPage
+              meetingId={currentMeetingId}
+              accessToken={accessToken}
+              userName={user?.username || user?.email || 'Guest'}
+              onBack={() => navigateTo('dashboard')}
+              zoomContainerRef={zoomContainerRef}
+              onMeetingJoined={handleMeetingJoined}
             />
           )}
           {currentPage === 'solo-study' && (
@@ -540,6 +904,190 @@ export default function App() {
             />
           )}
         </main>
+
+        {!chatPanelOpen && recentChatFriends.length > 0 && (
+          <div className="fixed bottom-6 right-6 z-40 flex items-center gap-2">
+            {recentChatFriends.map((friend) => {
+              const latest =
+                friends.find((item) => item.id === friend.id) || friend;
+              const isOnline = getActivityStatus(latest).isOnline;
+              const isNotified = Boolean(chatNotifications[friend.id]);
+              const ringClass = isNotified
+                ? 'ring-2 ring-emerald-400 animate-pulse'
+                : isOnline
+                ? 'ring-2 ring-emerald-200'
+                : '';
+              return (
+                <button
+                  key={friend.id}
+                  className={`size-12 rounded-full bg-white shadow-[0_20px_40px_rgba(15,23,42,0.18)] flex items-center justify-center hover:scale-[1.02] transition ${ringClass}`}
+                  onClick={() => handleOpenChat(latest)}
+                  title={latest.username || latest.email || 'Chat'}
+                >
+                  <Avatar className="size-10">
+                    {latest.profileImageUrl ? (
+                      <AvatarImage src={latest.profileImageUrl} alt={latest.username || 'Friend'} />
+                    ) : null}
+                    <AvatarFallback className="bg-gray-100 text-gray-600 text-xs font-semibold">
+                      {getInitials(latest.username || latest.email || 'F')}
+                    </AvatarFallback>
+                  </Avatar>
+                </button>
+              );
+            })}
+          </div>
+        )}
+
+        {chatFriend && chatPanelOpen && (
+          <div className="fixed bottom-6 right-6 z-40 w-[360px] h-[480px] rounded-3xl shadow-[0_20px_60px_rgba(15,23,42,0.18)] bg-white/95 border border-white/70 backdrop-blur">
+            <div className="p-4 border-b border-gray-100 flex items-center justify-between">
+              <div>
+                <p className="text-sm font-semibold text-gray-900">
+                  {chatFriend ? chatFriend.username || chatFriend.email || 'Friend' : 'Chat'}
+                </p>
+                <p className="text-[10px] text-gray-400">
+                  {socketReady ? 'Connected' : 'Connecting...'}
+                  {chatLoading ? ' • Loading history...' : ''}
+                </p>
+              </div>
+              <div className="flex items-center gap-2">
+                <button
+                  className="text-[10px] text-gray-400 hover:text-gray-600"
+                  onClick={() => setChatPanelOpen(false)}
+                >
+                  Close
+                </button>
+                <button
+                  className="text-[10px] text-gray-400 hover:text-gray-600"
+                  onClick={handleEndChat}
+                >
+                  End
+                </button>
+              </div>
+            </div>
+            <div
+              ref={chatScrollRef}
+              className="h-[320px] overflow-y-auto px-4 py-3 space-y-3"
+              onScroll={(event) => {
+                const target = event.currentTarget;
+                const distanceFromBottom =
+                  target.scrollHeight - target.scrollTop - target.clientHeight;
+                chatAutoScrollRef.current = distanceFromBottom < 32;
+              }}
+            >
+              {!chatFriend ? null : (getChatMessages(chatFriend.id).length ? (
+                getChatMessages(chatFriend.id).map((message) => {
+                  const isMine = message.senderId === user?.id;
+                  return (
+                    <div
+                      key={message.id}
+                      className={`flex ${isMine ? 'justify-end' : 'justify-start'}`}
+                    >
+                      <div
+                        className={`max-w-[75%] rounded-2xl px-3 py-2 text-xs ${
+                          isMine ? 'bg-emerald-500 text-white' : 'bg-gray-100 text-gray-700'
+                        } ${message.pending ? 'opacity-70' : ''}`}
+                      >
+                        <p className="whitespace-pre-wrap">{message.content}</p>
+                        <p className="mt-1 text-[10px] opacity-70">
+                          {new Date(message.createdAt).toLocaleTimeString('en-US', {
+                            hour: '2-digit',
+                            minute: '2-digit'
+                          })}
+                        </p>
+                      </div>
+                    </div>
+                  );
+                })
+              ) : (
+                <div className="h-full flex items-center justify-center text-xs text-gray-400">
+                  No messages yet. Say hi!
+                </div>
+              ))}
+            </div>
+            <div className="p-3 border-t border-gray-100 flex items-center gap-2">
+              <Input
+                placeholder="Type a message..."
+                value={chatInput}
+                onChange={(event) => setChatInput(event.target.value)}
+                onKeyDown={(event) => {
+                  if (event.key === 'Enter') {
+                    event.preventDefault();
+                    handleSendChat();
+                  }
+                }}
+              />
+              <Button onClick={handleSendChat} disabled={!chatInput.trim() || !socketReady}>
+                Send
+              </Button>
+            </div>
+          </div>
+        )}
+
+        {/* Zoom meeting: full size on meeting page, small popup when on other pages */}
+        <div
+          ref={zoomContainerRef}
+          className={`bg-[#1a1a1a] rounded-xl overflow-hidden border border-gray-200 z-50 ${
+            inMeeting
+              ? currentPage === 'meeting'
+                ? 'fixed left-32 right-8 top-6 bottom-6 shadow-xl'
+                : 'fixed shadow-2xl'
+              : currentPage === 'meeting'
+                ? 'fixed left-32 right-8 top-6 bottom-6 opacity-0 pointer-events-none'
+                : 'fixed right-6 bottom-6 w-0 h-0 overflow-hidden opacity-0 pointer-events-none'
+          }`}
+          style={inMeeting && currentPage !== 'meeting' ? { left: zoomPopupPos.x, top: zoomPopupPos.y, width: popupW, height: popupH } : undefined}
+        >
+          {inMeeting && currentPage !== 'meeting' && (
+            <div
+              data-resize-handle
+              className="absolute right-0 bottom-0 w-4 h-4 cursor-nwse-resize resize-handle z-20"
+              onMouseDown={onZoomPopupResizeMouseDown}
+              role="presentation"
+              aria-label="Resize"
+            >
+              <svg className="absolute right-1 bottom-1 w-3 h-3 text-white/50" viewBox="0 0 16 16" fill="currentColor">
+                <path d="M15 15H9v-2h4V9h2v6zM7 15H1V9h2v4h4v2zM15 7V1H9v2h4v4h2zM7 1v2H3v4H1V1h6z" />
+              </svg>
+            </div>
+          )}
+          {inMeeting && currentPage === 'meeting' && (
+            <div className="absolute top-0 left-0 right-0 h-10 bg-black/60 flex items-center justify-end px-3 z-10">
+              <button
+                type="button"
+                onClick={handleLeaveFloatingMeeting}
+                className="text-red-400 hover:text-red-300 text-sm font-medium px-3 py-1.5 rounded bg-red-500/20 hover:bg-red-500/30"
+              >
+                Leave
+              </button>
+            </div>
+          )}
+          {inMeeting && currentPage !== 'meeting' && (
+            <div
+              className="absolute top-0 left-0 right-0 h-10 bg-black/60 flex items-center justify-between gap-2 px-3 z-10 cursor-grab active:cursor-grabbing select-none"
+              onMouseDown={onZoomPopupMouseDown}
+              role="presentation"
+            >
+              <span className="text-white text-sm font-medium truncate">Meeting in progress</span>
+              <div className="flex items-center gap-1 shrink-0">
+                <button
+                  type="button"
+                  onClick={() => zoomMeetingIdRef.current && navigateToMeeting(zoomMeetingIdRef.current)}
+                  className="text-white/90 hover:text-white text-xs font-medium px-2 py-1 rounded bg-white/10 hover:bg-white/20"
+                >
+                  Return to meeting
+                </button>
+                <button
+                  type="button"
+                  onClick={handleLeaveFloatingMeeting}
+                  className="text-red-400 hover:text-red-300 text-sm font-medium"
+                >
+                  Leave
+                </button>
+              </div>
+            </div>
+          )}
+        </div>
       </div>
 
       <Toaster />
