@@ -962,13 +962,23 @@ app.get("/study-groups/:id/presence", async (req, res) => {
     // Ensure participants is an array
     if (!Array.isArray(group.participants)) group.participants = [];
     console.log("[presence:get] participants", group.participants, "hostId", group.hostId);
+    const presence = (await kvGet(`room-presence:${groupId}`)) || { users: [] };
+    const isInPresence = Array.isArray(presence.users)
+      ? presence.users.some((u) => u && u.id === user.id)
+      : false;
     const isParticipant = group.participants.includes(user.id);
     const isHost = group.hostId === user.id;
-    if (!isParticipant && !isHost) {
-      console.log("[presence:get] 403 Not accepted for user", user.id, "participants", group.participants);
+    if (!isParticipant && !isHost && !isInPresence) {
+      console.log(
+        "[presence:get] 403 Not accepted for user",
+        user.id,
+        "participants",
+        group.participants,
+        "presenceUsers",
+        presence.users?.map((u) => u.id)
+      );
       return res.status(403).json({ error: "Not accepted" });
     }
-    const presence = (await kvGet(`room-presence:${groupId}`)) || { users: [] };
     return res.json({ presence: presence.users });
   } catch (err) {
     if (String(err?.message).includes("Unauthorized"))
