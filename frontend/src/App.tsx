@@ -16,6 +16,7 @@ import { Toaster } from './components/ui/sonner';
 import { Button } from './components/ui/button';
 import { Input } from './components/ui/input';
 import { Avatar, AvatarFallback, AvatarImage } from './components/ui/avatar';
+import { Dialog, DialogContent, DialogHeader, DialogTitle } from './components/ui/dialog';
 import { 
   LayoutDashboard, 
   Users, 
@@ -149,6 +150,8 @@ export default function App() {
   const chatAutoScrollRef = useRef(true);
   const [currentMeetingId, setCurrentMeetingId] = useState<string | null>(null);
   const [inMeeting, setInMeeting] = useState(false);
+  const [meetingLauncherOpen, setMeetingLauncherOpen] = useState(false);
+  const [meetingLauncherId, setMeetingLauncherId] = useState<string | null>(null);
   const [zoomPopupPos, setZoomPopupPos] = useState({ x: 24, y: 24 });
   const [zoomPopupSize, setZoomPopupSize] = useState({ width: 360, height: 280 });
   const zoomDragRef = useRef({ isDragging: false, startX: 0, startY: 0, startLeft: 0, startTop: 0 });
@@ -206,9 +209,15 @@ export default function App() {
     setCurrentMeetingId(meetingId);
   };
 
-  const handleMeetingJoined = (client: unknown) => {
+  const openMeetingLauncher = (meetingId: string) => {
+    if (!meetingId) return;
+    setMeetingLauncherId(meetingId);
+    setMeetingLauncherOpen(true);
+  };
+
+  const handleMeetingJoined = (client: unknown, meetingIdOverride?: string | null) => {
     zoomClientRef.current = client;
-    zoomMeetingIdRef.current = currentMeetingId;
+    zoomMeetingIdRef.current = meetingIdOverride ?? currentMeetingId;
     setInMeeting(true);
     const c = client as { on?: (event: string, cb: (payload: { state?: string }) => void) => void };
     if (typeof c?.on === 'function') {
@@ -1031,7 +1040,7 @@ export default function App() {
               currentUserUsername={user?.username}
               roomUserIsIn={roomUserIsIn}
               onJoinRoom={navigateToRoom}
-              onJoinMeeting={navigateToMeeting}
+              onJoinMeeting={openMeetingLauncher}
             />
           )}
           {currentPage === 'room' && currentGroupId && (
@@ -1041,6 +1050,7 @@ export default function App() {
               currentUserId={user?.id || ''}
               onBack={() => navigateTo('study-groups')}
               onLeaveRoom={() => setRoomUserIsIn(null)}
+              onJoinMeeting={openMeetingLauncher}
             />
           )}
           {currentPage === 'meeting' && currentMeetingId && (
@@ -1123,6 +1133,40 @@ export default function App() {
             })}
           </div>
         )}
+
+        {/* Meeting launcher: open Zoom join UI without leaving current page */}
+        <Dialog
+          open={meetingLauncherOpen}
+          onOpenChange={(open) => {
+            setMeetingLauncherOpen(open);
+            if (!open) setMeetingLauncherId(null);
+          }}
+        >
+          <DialogContent className="sm:max-w-5xl max-w-[calc(100%-2rem)] p-0 max-h-[90vh] overflow-auto">
+            <DialogHeader className="px-6 pt-6">
+              <DialogTitle>Join Zoom meeting</DialogTitle>
+            </DialogHeader>
+            <div className="px-6 pb-6">
+              {meetingLauncherId ? (
+                <MeetingPage
+                  meetingId={meetingLauncherId}
+                  accessToken={accessToken}
+                  userName={user?.username || user?.email || 'Guest'}
+                  onBack={() => setMeetingLauncherOpen(false)}
+                  zoomContainerRef={zoomContainerRef}
+                  onMeetingJoined={(client) => {
+                    // Track meeting id for the floating "Return to meeting" button
+                    setCurrentMeetingId(meetingLauncherId);
+                    handleMeetingJoined(client, meetingLauncherId);
+                    setMeetingLauncherOpen(false);
+                  }}
+                />
+              ) : (
+                <div className="py-10 text-center text-sm text-gray-500">Missing meeting id.</div>
+              )}
+            </div>
+          </DialogContent>
+        </Dialog>
 
         {chatFriend && chatPanelOpen && (
           <div className="fixed bottom-6 right-6 z-40 w-[360px] h-[480px] rounded-3xl shadow-[0_20px_60px_rgba(15,23,42,0.18)] bg-white/95 border border-white/70 backdrop-blur">
