@@ -111,7 +111,8 @@ const GOOGLE_CLIENT_SECRET = process.env.GOOGLE_CLIENT_SECRET ?? "";
 const GOOGLE_REDIRECT_URI =
   process.env.GOOGLE_REDIRECT_URI ?? "http://localhost:8080/google/oauth/callback";
 
-const GOOGLE_SCOPES = ["https://www.googleapis.com/auth/calendar.readonly"];
+// NOTE: We need write scope so calendar drag/edit updates Google too.
+const GOOGLE_SCOPES = ["https://www.googleapis.com/auth/calendar.events"];
 
 const googleConfigReady = () =>
   Boolean(GOOGLE_CLIENT_ID && GOOGLE_CLIENT_SECRET && GOOGLE_REDIRECT_URI);
@@ -168,7 +169,10 @@ app.get("/google/oauth/url", async (req, res) => {
     const oauth2 = createGoogleOAuthClient();
 
     const existingTokens = await getStoredGoogleTokens(user.id);
-    const needsConsent = !existingTokens?.refresh_token;
+    const forceConsent =
+      String(req.query.force || "").toLowerCase() === "1" ||
+      String(req.query.force || "").toLowerCase() === "true";
+    const needsConsent = forceConsent || !existingTokens?.refresh_token;
 
     const state = crypto.randomUUID();
     await kvSet(googleOauthStateKey(state), {
@@ -284,6 +288,153 @@ app.get("/google/calendar/events", async (req, res) => {
     if (msg.includes("Unauthorized")) return res.status(401).json({ error: "Unauthorized" });
     console.error("Google events error:", err);
     return res.status(500).json({ error: "Failed to fetch Google Calendar events" });
+  }
+});
+
+app.patch("/google/calendar/events/:eventId", async (req, res) => {
+  try {
+    if (!googleConfigReady()) {
+      return res.status(500).json({ error: "Google OAuth is not configured" });
+    }
+
+    const user = await requireUser(req);
+    const tokens = await getStoredGoogleTokens(user.id);
+    if (!tokens) {
+      return res.status(401).json({ error: "GOOGLE_NOT_CONNECTED" });
+    }
+
+    const eventId = req.params.eventId ? String(req.params.eventId) : "";
+    if (!eventId) return res.status(400).json({ error: "eventId is required" });
+
+    const {
+      calendarId = "primary",
+      start,
+      end,
+      summary,
+      description,
+      location,
+    } = req.body ?? {};
+
+    if (!start || !end) {
+      return res.status(400).json({ error: "start and end are required" });
+    }
+
+    const oauth2 = createGoogleOAuthClient();
+    oauth2.setCredentials(tokens);
+    oauth2.on("tokens", (t) => {
+      saveGoogleTokens(user.id, t).catch(() => {});
+    });
+
+    const calendar = google.calendar({ version: "v3", auth: oauth2 });
+    const resp = await calendar.events.patch({
+      calendarId: String(calendarId || "primary"),
+      eventId,
+      requestBody: {
+        start,
+        end,
+        ...(summary !== undefined ? { summary: String(summary || "") } : {}),
+        ...(description !== undefined ? { description: String(description || "") } : {}),
+        ...(location !== undefined ? { location: String(location || "") } : {}),
+      },
+    });
+
+    return res.json({ event: resp.data });
+  } catch (err) {
+    const msg = String(err?.message ?? err);
+    if (msg.includes("Unauthorized")) return res.status(401).json({ error: "Unauthorized" });
+    console.error("Google event patch error:", err);
+    // Pass through common Google API errors for the client to react (e.g. insufficientPermissions)
+    return res.status(500).json({ error: msg || "Failed to update Google Calendar event" });
+  }
+});
+
+app.delete("/google/calendar/events/:eventId", async (req, res) => {
+  try {
+    if (!googleConfigReady()) {
+      return res.status(500).json({ error: "Google OAuth is not configured" });
+    }
+
+    const user = await requireUser(req);
+    const tokens = await getStoredGoogleTokens(user.id);
+    if (!tokens) {
+      return res.status(401).json({ error: "GOOGLE_NOT_CONNECTED" });
+    }
+
+    const eventId = req.params.eventId ? String(req.params.eventId) : "";
+    if (!eventId) return res.status(400).json({ error: "eventId is required" });
+
+    const calendarId = req.query.calendarId ? String(req.query.calendarId) : "primary";
+
+    const oauth2 = createGoogleOAuthClient();
+    oauth2.setCredentials(tokens);
+    oauth2.on("tokens", (t) => {
+      saveGoogleTokens(user.id, t).catch(() => {});
+    });
+
+    const calendar = google.calendar({ version: "v3", auth: oauth2 });
+    await calendar.events.delete({
+      calendarId: String(calendarId || "primary"),
+      eventId,
+    });
+
+    return res.status(204).send("");
+  } catch (err) {
+    const msg = String(err?.message ?? err);
+    if (msg.includes("Unauthorized")) return res.status(401).json({ error: "Unauthorized" });
+    console.error("Google event delete error:", err);
+    return res.status(500).json({ error: msg || "Failed to delete Google Calendar event" });
+  }
+});
+
+app.post("/google/calendar/events", async (req, res) => {
+  try {
+    if (!googleConfigReady()) {
+      return res.status(500).json({ error: "Google OAuth is not configured" });
+    }
+
+    const user = await requireUser(req);
+    const tokens = await getStoredGoogleTokens(user.id);
+    if (!tokens) {
+      return res.status(401).json({ error: "GOOGLE_NOT_CONNECTED" });
+    }
+
+    const {
+      calendarId = "primary",
+      start,
+      end,
+      summary,
+      description,
+      location,
+    } = req.body ?? {};
+
+    if (!start || !end) {
+      return res.status(400).json({ error: "start and end are required" });
+    }
+
+    const oauth2 = createGoogleOAuthClient();
+    oauth2.setCredentials(tokens);
+    oauth2.on("tokens", (t) => {
+      saveGoogleTokens(user.id, t).catch(() => {});
+    });
+
+    const calendar = google.calendar({ version: "v3", auth: oauth2 });
+    const resp = await calendar.events.insert({
+      calendarId: String(calendarId || "primary"),
+      requestBody: {
+        start,
+        end,
+        ...(summary !== undefined ? { summary: String(summary || "") } : {}),
+        ...(description !== undefined ? { description: String(description || "") } : {}),
+        ...(location !== undefined ? { location: String(location || "") } : {}),
+      },
+    });
+
+    return res.json({ event: resp.data });
+  } catch (err) {
+    const msg = String(err?.message ?? err);
+    if (msg.includes("Unauthorized")) return res.status(401).json({ error: "Unauthorized" });
+    console.error("Google event create error:", err);
+    return res.status(500).json({ error: msg || "Failed to create Google Calendar event" });
   }
 });
 
