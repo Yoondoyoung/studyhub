@@ -16,6 +16,7 @@ import { Toaster } from './components/ui/sonner';
 import { Button } from './components/ui/button';
 import { Input } from './components/ui/input';
 import { Avatar, AvatarFallback, AvatarImage } from './components/ui/avatar';
+import { Dialog, DialogContent, DialogHeader, DialogTitle } from './components/ui/dialog';
 import { 
   LayoutDashboard, 
   Users, 
@@ -110,6 +111,12 @@ interface ChatMessage {
   pending?: boolean;
 }
 
+interface FriendRequest {
+  requesterId: string;
+  createdAt: string;
+  requester?: Friend;
+}
+
 interface StudySession {
   id: string;
   name: string;
@@ -141,6 +148,7 @@ export default function App() {
   const [chatPanelOpen, setChatPanelOpen] = useState(false);
   const [recentChatFriends, setRecentChatFriends] = useState<Friend[]>([]);
   const [chatNotifications, setChatNotifications] = useState<Record<string, boolean>>({});
+  const [incomingFriendRequestCount, setIncomingFriendRequestCount] = useState(0);
   const socketRef = useRef<WebSocket | null>(null);
   const friendsRef = useRef<Friend[]>([]);
   const chatFriendRef = useRef<Friend | null>(null);
@@ -149,6 +157,8 @@ export default function App() {
   const chatAutoScrollRef = useRef(true);
   const [currentMeetingId, setCurrentMeetingId] = useState<string | null>(null);
   const [inMeeting, setInMeeting] = useState(false);
+  const [meetingLauncherOpen, setMeetingLauncherOpen] = useState(false);
+  const [meetingLauncherId, setMeetingLauncherId] = useState<string | null>(null);
   const [zoomPopupPos, setZoomPopupPos] = useState({ x: 24, y: 24 });
   const [zoomPopupSize, setZoomPopupSize] = useState({ width: 360, height: 280 });
   const zoomDragRef = useRef({ isDragging: false, startX: 0, startY: 0, startLeft: 0, startTop: 0 });
@@ -206,9 +216,15 @@ export default function App() {
     setCurrentMeetingId(meetingId);
   };
 
-  const handleMeetingJoined = (client: unknown) => {
+  const openMeetingLauncher = (meetingId: string) => {
+    if (!meetingId) return;
+    setMeetingLauncherId(meetingId);
+    setMeetingLauncherOpen(true);
+  };
+
+  const handleMeetingJoined = (client: unknown, meetingIdOverride?: string | null) => {
     zoomClientRef.current = client;
-    zoomMeetingIdRef.current = currentMeetingId;
+    zoomMeetingIdRef.current = meetingIdOverride ?? currentMeetingId;
     setInMeeting(true);
     const c = client as { on?: (event: string, cb: (payload: { state?: string }) => void) => void };
     if (typeof c?.on === 'function') {
@@ -545,6 +561,20 @@ export default function App() {
     navigateTo('solo-study');
   };
 
+  const fetchIncomingFriendRequestCount = async () => {
+    if (!accessToken) return;
+    try {
+      const response = await fetch(`${apiBase}/friends/requests`, {
+        headers: { Authorization: `Bearer ${accessToken}` }
+      });
+      const data = await response.json();
+      const requests = Array.isArray(data.requests) ? (data.requests as FriendRequest[]) : [];
+      setIncomingFriendRequestCount(requests.length);
+    } catch (error) {
+      console.error('Failed to fetch friend requests:', error);
+    }
+  };
+
   const handleDeleteSession = async (sessionId: string, e: React.MouseEvent) => {
     e.stopPropagation();
     
@@ -744,6 +774,13 @@ export default function App() {
   }, [accessToken]);
 
   useEffect(() => {
+    if (!accessToken) return;
+    fetchIncomingFriendRequestCount();
+    const interval = setInterval(fetchIncomingFriendRequestCount, 10000);
+    return () => clearInterval(interval);
+  }, [accessToken]);
+
+  useEffect(() => {
     friendsRef.current = friends;
   }, [friends]);
 
@@ -772,32 +809,73 @@ export default function App() {
     socket.onmessage = (event) => {
       try {
         const payload = JSON.parse(event.data);
-        if (payload?.type !== 'chat:message' || !payload?.message) return;
-        const message = payload.message as ChatMessage;
-        const friendId =
-          message.senderId === user.id ? message.recipientId : message.senderId;
-        upsertChatMessage(friendId, message);
-        if (message.senderId !== user.id) {
-          const activeFriendId = chatFriendRef.current?.id;
-          const isChatOpen = chatPanelOpenRef.current;
-          if (!isChatOpen || activeFriendId !== friendId) {
-            const friendInfo =
-              friendsRef.current.find((friend) => friend.id === friendId) ||
-              chatFriendRef.current ||
-              {
-                id: friendId,
-                username: 'Friend',
-                email: '',
-                category: '',
-                lastActivityAt: null,
-                profileImageUrl: ''
-              };
-            setRecentChatFriends((prev) => {
-              const next = [friendInfo as Friend, ...prev.filter((item) => item.id !== friendId)];
-              return next.slice(0, 3);
-            });
-            setChatNotifications((prev) => ({ ...prev, [friendId]: true }));
+        if (payload?.type === 'chat:message' && payload?.message) {
+          const message = payload.message as ChatMessage;
+          const friendId =
+            message.senderId === user.id ? message.recipientId : message.senderId;
+          upsertChatMessage(friendId, message);
+          if (message.senderId !== user.id) {
+            const activeFriendId = chatFriendRef.current?.id;
+            const isChatOpen = chatPanelOpenRef.current;
+            if (!isChatOpen || activeFriendId !== friendId) {
+              const friendInfo =
+                friendsRef.current.find((friend) => friend.id === friendId) ||
+                chatFriendRef.current ||
+                {
+                  id: friendId,
+                  username: 'Friend',
+                  email: '',
+                  category: '',
+                  lastActivityAt: null,
+                  profileImageUrl: ''
+                };
+              setRecentChatFriends((prev) => {
+                const next = [friendInfo as Friend, ...prev.filter((item) => item.id !== friendId)];
+                return next.slice(0, 3);
+              });
+              setChatNotifications((prev) => ({ ...prev, [friendId]: true }));
+            }
           }
+          return;
+        }
+
+        if (payload?.type === 'friend:request') {
+          const senderName = payload?.request?.requester?.username || 'Someone';
+          toast.info(`${senderName} sent you a friend request.`);
+          setIncomingFriendRequestCount((prev) => prev + 1);
+          return;
+        }
+
+        if (payload?.type === 'friend:request:accepted') {
+          const friendName = payload?.friend?.username || 'Your friend';
+          toast.success(`${friendName} accepted your request.`);
+          // Refresh friend list so chat targets are up-to-date.
+          fetch(`${apiBase}/friends`, {
+            headers: { Authorization: `Bearer ${accessToken}` }
+          })
+            .then((response) => response.json())
+            .then((data) => setFriends(data.friends || []))
+            .catch(() => {});
+          return;
+        }
+
+        if (payload?.type === 'friend:request:rejected') {
+          toast.error('Your friend request was rejected.');
+          return;
+        }
+
+        if (payload?.type === 'chat:error') {
+          const recipientId = String(payload?.recipientId || '');
+          const failedClientId = payload?.clientId ? String(payload.clientId) : '';
+          if (recipientId && failedClientId) {
+            setChatMessagesByFriend((prev) => {
+              const existing = prev[recipientId] || [];
+              const next = existing.filter((item) => item.clientId !== failedClientId);
+              return { ...prev, [recipientId]: next };
+            });
+          }
+          toast.error(payload?.message || 'Unable to send message.');
+          return;
         }
       } catch (error) {
         console.error('Failed to parse chat message:', error);
@@ -848,6 +926,9 @@ export default function App() {
       </>
     );
   }
+
+  const unreadChatCount = Object.values(chatNotifications).filter(Boolean).length;
+  const totalFriendAlerts = incomingFriendRequestCount + unreadChatCount;
 
   return (
     <div className="min-h-screen bg-gradient-to-br from-[#eaf5ff] via-[#f7f9ff] to-[#fde9f1] flex">
@@ -946,17 +1027,24 @@ export default function App() {
             )}
           </div>
           
-          <button
-            onClick={() => navigateTo('friends')}
-            className={`size-12 rounded-full flex items-center justify-center transition-colors ${
-              currentPage === 'friends'
-                ? 'bg-black text-white shadow-md'
-                : 'bg-white text-gray-600 hover:bg-gray-100'
-            }`}
-            title="Friends"
-          >
-            <Users className="size-5" />
-          </button>
+          <div className="relative">
+            <button
+              onClick={() => navigateTo('friends')}
+              className={`size-12 rounded-full flex items-center justify-center transition-colors ${
+                currentPage === 'friends'
+                  ? 'bg-black text-white shadow-md'
+                  : 'bg-white text-gray-600 hover:bg-gray-100'
+              }`}
+              title="Friends"
+            >
+              <Users className="size-5" />
+            </button>
+            {totalFriendAlerts > 0 ? (
+              <span className="absolute -top-1 -right-1 min-w-[18px] h-[18px] px-1 rounded-full bg-rose-500 text-white text-[10px] font-semibold flex items-center justify-center">
+                {totalFriendAlerts > 99 ? '99+' : totalFriendAlerts}
+              </span>
+            ) : null}
+          </div>
 
           <button
             onClick={() => navigateTo('calendar')}
@@ -1031,7 +1119,7 @@ export default function App() {
               currentUserUsername={user?.username}
               roomUserIsIn={roomUserIsIn}
               onJoinRoom={navigateToRoom}
-              onJoinMeeting={navigateToMeeting}
+              onJoinMeeting={openMeetingLauncher}
             />
           )}
           {currentPage === 'room' && currentGroupId && (
@@ -1041,6 +1129,7 @@ export default function App() {
               currentUserId={user?.id || ''}
               onBack={() => navigateTo('study-groups')}
               onLeaveRoom={() => setRoomUserIsIn(null)}
+              onJoinMeeting={openMeetingLauncher}
             />
           )}
           {currentPage === 'meeting' && currentMeetingId && (
@@ -1062,6 +1151,7 @@ export default function App() {
           {currentPage === 'friends' && (
             <FriendsPage
               accessToken={accessToken}
+              onRequestsUpdated={fetchIncomingFriendRequestCount}
               onViewFriend={(friend) => {
                 setSelectedFriend(friend);
                 setCurrentPage('friend-detail');
@@ -1123,6 +1213,40 @@ export default function App() {
             })}
           </div>
         )}
+
+        {/* Meeting launcher: open Zoom join UI without leaving current page */}
+        <Dialog
+          open={meetingLauncherOpen}
+          onOpenChange={(open) => {
+            setMeetingLauncherOpen(open);
+            if (!open) setMeetingLauncherId(null);
+          }}
+        >
+          <DialogContent className="sm:max-w-5xl max-w-[calc(100%-2rem)] p-0 max-h-[90vh] overflow-auto">
+            <DialogHeader className="px-6 pt-6">
+              <DialogTitle>Join Zoom meeting</DialogTitle>
+            </DialogHeader>
+            <div className="px-6 pb-6">
+              {meetingLauncherId ? (
+                <MeetingPage
+                  meetingId={meetingLauncherId}
+                  accessToken={accessToken}
+                  userName={user?.username || user?.email || 'Guest'}
+                  onBack={() => setMeetingLauncherOpen(false)}
+                  zoomContainerRef={zoomContainerRef}
+                  onMeetingJoined={(client) => {
+                    // Track meeting id for the floating "Return to meeting" button
+                    setCurrentMeetingId(meetingLauncherId);
+                    handleMeetingJoined(client, meetingLauncherId);
+                    setMeetingLauncherOpen(false);
+                  }}
+                />
+              ) : (
+                <div className="py-10 text-center text-sm text-gray-500">Missing meeting id.</div>
+              )}
+            </div>
+          </DialogContent>
+        </Dialog>
 
         {chatFriend && chatPanelOpen && (
           <div className="fixed bottom-6 right-6 z-40 w-[360px] h-[480px] rounded-3xl shadow-[0_20px_60px_rgba(15,23,42,0.18)] bg-white/95 border border-white/70 backdrop-blur">

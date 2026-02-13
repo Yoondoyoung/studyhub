@@ -459,6 +459,12 @@ const getRoomChat = async (roomId) => {
   return { key, messages: thread.messages };
 };
 
+const isMutualFriendship = async (userId, friendId) => {
+  const forward = await kvGet(`friendship:${userId}:${friendId}`);
+  const reverse = await kvGet(`friendship:${friendId}:${userId}`);
+  return Boolean(forward && reverse);
+};
+
 app.post("/auth/signup", async (req, res) => {
   try {
     const { email, password, username, userId, category } = req.body ?? {};
@@ -1164,21 +1170,73 @@ app.post("/friends/add", async (req, res) => {
         : null);
     if (!friend) return res.status(404).json({ error: "User not found" });
     if (friend.id === user.id) {
-      return res.status(400).json({ error: "You cannot follow yourself" });
+      return res.status(400).json({ error: "You cannot send a request to yourself" });
     }
 
-    const existing = await kvGet(`friendship:${user.id}:${friend.id}`);
-    if (existing) {
-      return res.status(400).json({ error: "Already following this user" });
+    const isFriends = await isMutualFriendship(user.id, friend.id);
+    if (isFriends) {
+      return res.status(400).json({ error: "Already friends" });
     }
 
-    await kvSet(`friendship:${user.id}:${friend.id}`, {
-      userId: user.id,
-      friendId: friend.id,
+    const incomingRequestKey = `friend-request:${user.id}:${friend.id}`;
+    const outgoingRequestKey = `friend-request:${friend.id}:${user.id}`;
+    const incomingRequest = await kvGet(incomingRequestKey);
+    const outgoingRequest = await kvGet(outgoingRequestKey);
+
+    // If target already requested me, accept immediately.
+    if (incomingRequest) {
+      const createdAt = new Date().toISOString();
+      await kvSet(`friendship:${user.id}:${friend.id}`, {
+        userId: user.id,
+        friendId: friend.id,
+        createdAt,
+      });
+      await kvSet(`friendship:${friend.id}:${user.id}`, {
+        userId: friend.id,
+        friendId: user.id,
+        createdAt,
+      });
+      await kvDel(incomingRequestKey);
+      sendToUser(friend.id, {
+        type: "friend:request:accepted",
+        friend: {
+          id: user.id,
+          username: user.username || user.user_metadata?.username || user.email || "User",
+          email: user.email || "",
+          category: user.category || "",
+          profileImageUrl: user.profileImageUrl || "",
+        },
+      });
+      return res.json({ success: true, autoAccepted: true, friend });
+    }
+
+    if (outgoingRequest) {
+      return res.status(400).json({ error: "Friend request already sent" });
+    }
+
+    const request = {
+      requesterId: user.id,
+      recipientId: friend.id,
       createdAt: new Date().toISOString(),
+    };
+    await kvSet(outgoingRequestKey, request);
+
+    sendToUser(friend.id, {
+      type: "friend:request",
+      request: {
+        requesterId: user.id,
+        createdAt: request.createdAt,
+        requester: {
+          id: user.id,
+          username: user.username || user.user_metadata?.username || user.email || "User",
+          email: user.email || "",
+          category: user.category || "",
+          profileImageUrl: user.profileImageUrl || "",
+        },
+      },
     });
 
-    return res.json({ success: true, friend });
+    return res.json({ success: true, requestSent: true, friend });
   } catch {
     return res.status(401).json({ error: "Unauthorized" });
   }
@@ -1188,13 +1246,145 @@ app.get("/friends", async (req, res) => {
   try {
     const user = await requireUser(req);
     const friendships = await kvGetByPrefix(`friendship:${user.id}:`);
-    const friendIds = friendships.map((f) => f.friendId);
+    const friendIds = [];
+    for (const friendship of friendships) {
+      const friendId = String(friendship?.friendId || "");
+      if (!friendId) continue;
+      const reverse = await kvGet(`friendship:${friendId}:${user.id}`);
+      if (reverse) friendIds.push(friendId);
+    }
     const friends = [];
     for (const friendId of friendIds) {
       const friend = await kvGet(`user:${friendId}`);
       if (friend) friends.push(friend);
     }
     return res.json({ friends });
+  } catch {
+    return res.status(401).json({ error: "Unauthorized" });
+  }
+});
+
+app.get("/friends/requests", async (req, res) => {
+  try {
+    const user = await requireUser(req);
+    const incomingRequests = await kvGetByPrefix(`friend-request:${user.id}:`);
+    const requests = [];
+    for (const request of incomingRequests) {
+      const requesterId = String(request?.requesterId || "");
+      if (!requesterId) continue;
+      const requester = await kvGet(`user:${requesterId}`);
+      if (!requester) continue;
+      requests.push({
+        requesterId,
+        createdAt: request.createdAt || new Date().toISOString(),
+        requester: {
+          id: requester.id,
+          username: requester.username || requester.email || "User",
+          email: requester.email || "",
+          category: requester.category || "",
+          profileImageUrl: requester.profileImageUrl || "",
+        },
+      });
+    }
+    requests.sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
+    return res.json({ requests });
+  } catch {
+    return res.status(401).json({ error: "Unauthorized" });
+  }
+});
+
+app.get("/friends/requests/sent", async (req, res) => {
+  try {
+    const user = await requireUser(req);
+    const outgoingRequests = await kvGetByPrefix("friend-request:");
+    const requests = [];
+    for (const request of outgoingRequests) {
+      if (String(request?.requesterId || "") !== user.id) continue;
+      const recipientId = String(request?.recipientId || "");
+      if (!recipientId) continue;
+      const recipient = await kvGet(`user:${recipientId}`);
+      if (!recipient) continue;
+      requests.push({
+        recipientId,
+        createdAt: request.createdAt || new Date().toISOString(),
+        recipient: {
+          id: recipient.id,
+          username: recipient.username || recipient.email || "User",
+          email: recipient.email || "",
+          category: recipient.category || "",
+          profileImageUrl: recipient.profileImageUrl || "",
+        },
+      });
+    }
+    requests.sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
+    return res.json({ requests });
+  } catch {
+    return res.status(401).json({ error: "Unauthorized" });
+  }
+});
+
+app.post("/friends/requests/:requesterId/accept", async (req, res) => {
+  try {
+    const user = await requireUser(req);
+    const requesterId = String(req.params.requesterId || "");
+    if (!requesterId) return res.status(400).json({ error: "Requester id required" });
+    if (requesterId === user.id) return res.status(400).json({ error: "Invalid requester id" });
+    const requestKey = `friend-request:${user.id}:${requesterId}`;
+    const request = await kvGet(requestKey);
+    if (!request) return res.status(404).json({ error: "Friend request not found" });
+    const requester = await kvGet(`user:${requesterId}`);
+    if (!requester) {
+      await kvDel(requestKey);
+      return res.status(404).json({ error: "User not found" });
+    }
+
+    const createdAt = new Date().toISOString();
+    await kvSet(`friendship:${user.id}:${requesterId}`, {
+      userId: user.id,
+      friendId: requesterId,
+      createdAt,
+    });
+    await kvSet(`friendship:${requesterId}:${user.id}`, {
+      userId: requesterId,
+      friendId: user.id,
+      createdAt,
+    });
+    await kvDel(requestKey);
+
+    sendToUser(requesterId, {
+      type: "friend:request:accepted",
+      friend: {
+        id: user.id,
+        username: user.username || user.user_metadata?.username || user.email || "User",
+        email: user.email || "",
+        category: user.category || "",
+        profileImageUrl: user.profileImageUrl || "",
+      },
+    });
+
+    return res.json({ success: true });
+  } catch {
+    return res.status(401).json({ error: "Unauthorized" });
+  }
+});
+
+app.post("/friends/requests/:requesterId/reject", async (req, res) => {
+  try {
+    const user = await requireUser(req);
+    const requesterId = String(req.params.requesterId || "");
+    if (!requesterId) return res.status(400).json({ error: "Requester id required" });
+    if (requesterId === user.id) return res.status(400).json({ error: "Invalid requester id" });
+    const requestKey = `friend-request:${user.id}:${requesterId}`;
+    const request = await kvGet(requestKey);
+    if (!request) return res.status(404).json({ error: "Friend request not found" });
+
+    await kvDel(requestKey);
+    sendToUser(requesterId, {
+      type: "friend:request:rejected",
+      userId: user.id,
+    });
+
+    return res.json({ success: true });
   } catch {
     return res.status(401).json({ error: "Unauthorized" });
   }
@@ -2828,6 +3018,8 @@ app.get("/dm/:friendId", async (req, res) => {
     const user = await requireUser(req);
     const friendId = String(req.params.friendId || "");
     if (!friendId) return res.status(400).json({ error: "Friend id required" });
+    const canChat = await isMutualFriendship(user.id, friendId);
+    if (!canChat) return res.status(403).json({ error: "You can chat only with accepted friends" });
     const { messages } = await getDmThread(user.id, friendId);
     return res.json({ messages });
   } catch (err) {
@@ -3074,6 +3266,18 @@ wss.on("connection", async (socket, req) => {
           if (!recipientId || !content) return;
           if (!socket.userId) return;
           if (recipientId === socket.userId) return;
+          const canChat = await isMutualFriendship(socket.userId, recipientId);
+          if (!canChat) {
+            socket.send(
+              JSON.stringify({
+                type: "chat:error",
+                recipientId,
+                clientId,
+                message: "You can chat only with accepted friends",
+              })
+            );
+            return;
+          }
 
           const message = {
             id: crypto.randomUUID(),
