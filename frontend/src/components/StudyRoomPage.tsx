@@ -11,7 +11,7 @@ import {
   AlertDialogHeader,
   AlertDialogTitle,
 } from './ui/alert-dialog';
-import { DoorOpen, Users, Upload, BookOpen, Loader2, CheckCircle, XCircle, HelpCircle, FileText } from 'lucide-react';
+import { DoorOpen, Users, Upload, BookOpen, Loader2, CheckCircle, XCircle, HelpCircle, FileText, Video } from 'lucide-react';
 import { apiBase } from '../utils/api';
 import { toast } from 'sonner';
 import { getMedalEmoji } from '../utils/medal';
@@ -207,6 +207,8 @@ export function StudyRoomPage({
   // Fetch room chat history
   useEffect(() => {
     if (joinBlocked) return;
+    if (!group) return;
+    if (group.meetingId) return; // Online rooms: no room chat
     let cancelled = false;
     (async () => {
       try {
@@ -220,7 +222,7 @@ export function StudyRoomPage({
       }
     })();
     return () => { cancelled = true; };
-  }, [groupId, accessToken, joinBlocked]);
+  }, [groupId, accessToken, joinBlocked, group?.meetingId, group]);
 
   // Load quiz files
   useEffect(() => {
@@ -268,7 +270,9 @@ export function StudyRoomPage({
 
   // Poll completion status when quiz exists
   useEffect(() => {
-    if (!quiz || !isStudyTime) return;
+    if (!quiz) return;
+    if (!group) return;
+    if (!(isStudyTime || Boolean(group.meetingId))) return;
 
     const fetchCompletionStatus = async () => {
       try {
@@ -286,11 +290,13 @@ export function StudyRoomPage({
     const interval = setInterval(fetchCompletionStatus, 2000); // Poll every 2 seconds
 
     return () => clearInterval(interval);
-  }, [quiz, isStudyTime, groupId, accessToken]);
+  }, [quiz, isStudyTime, groupId, accessToken, group?.meetingId, group]);
 
   // WebSocket: join room + receive messages
   useEffect(() => {
     if (joinBlocked) return;
+    if (!group) return;
+    if (group.meetingId) return; // Online rooms: no room chat
     const socket = new WebSocket(buildWsUrl(accessToken));
     socketRef.current = socket;
     setSocketReady(false);
@@ -337,15 +343,17 @@ export function StudyRoomPage({
       socket.close();
       socketRef.current = null;
     };
-  }, [groupId, accessToken, joinBlocked]);
+  }, [groupId, accessToken, joinBlocked, group?.meetingId, group]);
 
   useEffect(() => {
+    if (!group) return;
+    if (group.meetingId) return; // Online rooms: no room chat
     const container = chatScrollRef.current;
     if (!container) return;
     if (chatAutoScrollRef.current) {
       container.scrollTop = container.scrollHeight;
     }
-  }, [chatMessages]);
+  }, [chatMessages, group?.meetingId, group]);
 
   // Poll presence list
   useEffect(() => {
@@ -628,6 +636,8 @@ export function StudyRoomPage({
   }
 
   const currentQuestion = quiz?.questions[currentQuestionIndex];
+  const isOnlineRoom = Boolean(group.meetingId);
+  const showQuizPanel = isOnlineRoom || isStudyTime;
   const mapQuery = group ? encodeURIComponent(group.location) : '';
   const mapSrc = `https://www.google.com/maps?q=${mapQuery}&output=embed`;
 
@@ -653,6 +663,12 @@ export function StudyRoomPage({
           <DoorOpen className="size-4" />
           Leave room
         </Button>
+        {isOnlineRoom && (
+          <Button onClick={openZoomFloating} size="sm" className="bg-blue-600 hover:bg-blue-700 gap-2">
+            <Video className="size-4" />
+            Open Zoom
+          </Button>
+        )}
         <AlertDialog open={leaveDialogOpen} onOpenChange={setLeaveDialogOpen}>
           <AlertDialogContent>
             <AlertDialogHeader>
@@ -673,36 +689,19 @@ export function StudyRoomPage({
 
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
         {/* Left: Map or Group Quiz */}
-        {!isStudyTime ? (
-          group.meetingId ? (
-            /* Online room - Zoom panel */
-            <div className="lg:col-span-2 rounded-lg overflow-hidden border bg-white h-[520px] min-h-[280px] flex flex-col">
-              <div className="flex-1 flex flex-col items-center justify-center gap-4 p-6 text-center">
-                <div className="text-5xl">🎥</div>
-                <h3 className="text-xl font-bold">Online Meeting (Zoom)</h3>
-                <p className="text-sm text-muted-foreground max-w-md">
-                  This room works like an in-person room (chat, presence, quiz). Open Zoom in a floating window inside the app.
-                </p>
-                <Button onClick={openZoomFloating} className="bg-blue-600 hover:bg-blue-700">
-                  Open Zoom
-                </Button>
-                <p className="text-xs text-muted-foreground">You can move/resize it and keep it while navigating.</p>
-              </div>
-            </div>
-          ) : (
-            /* Before Study Time - Show Map */
-            <div className="lg:col-span-2 rounded-lg overflow-hidden border bg-gray-100 h-[520px] min-h-[280px]">
-              <iframe
-                title="Meeting location"
-                src={mapSrc}
-                className="w-full h-full"
-                style={{ border: 0 }}
-                allowFullScreen
-                loading="lazy"
-                referrerPolicy="no-referrer-when-downgrade"
-              />
-            </div>
-          )
+        {!showQuizPanel ? (
+          /* Before Study Time - Show Map (in-person only) */
+          <div className="lg:col-span-2 rounded-lg overflow-hidden border bg-gray-100 h-[520px] min-h-[280px]">
+            <iframe
+              title="Meeting location"
+              src={mapSrc}
+              className="w-full h-full"
+              style={{ border: 0 }}
+              allowFullScreen
+              loading="lazy"
+              referrerPolicy="no-referrer-when-downgrade"
+            />
+          </div>
         ) : (
           /* After Study Time - Show Group Quiz */
           <div className="lg:col-span-2 rounded-lg border bg-white h-[520px] min-h-[280px] flex flex-col">
@@ -1038,83 +1037,85 @@ export function StudyRoomPage({
             </CardContent>
           </Card>
 
-          <Card className="flex-1 flex flex-col overflow-hidden min-h-[320px]">
-            <CardHeader className="pb-2">
-              <CardTitle className="text-base flex items-center justify-between">
-                <span>Room chat</span>
-                <span className="text-xs text-muted-foreground">
-                  {socketReady ? 'Live' : 'Connecting...'}
-                </span>
-              </CardTitle>
-            </CardHeader>
-            <CardContent className="flex-1 min-h-0 flex flex-col gap-3">
-              <div
-                ref={chatScrollRef}
-                className="flex-1 min-h-0 overflow-y-auto space-y-2 rounded-lg border border-gray-100 bg-white/80 p-3"
-                onScroll={(event) => {
-                  const target = event.currentTarget;
-                  const distanceFromBottom =
-                    target.scrollHeight - target.scrollTop - target.clientHeight;
-                  chatAutoScrollRef.current = distanceFromBottom < 32;
-                }}
-              >
-                {chatMessages.length === 0 ? (
-                  <div className="h-full flex items-center justify-center text-xs text-gray-400">
-                    No messages yet. Say hi!
-                  </div>
-                ) : (
-                  chatMessages.map((message) => {
-                    const isMine = message.senderId === currentUserId;
-                    return (
-                      <div
-                        key={message.id}
-                        className={`flex ${isMine ? 'justify-end' : 'justify-start'}`}
-                      >
-                        <div
-                          className={`max-w-[80%] rounded-2xl px-3 py-2 text-xs ${
-                            isMine ? 'bg-emerald-500 text-white' : 'bg-gray-100 text-gray-700'
-                          } ${message.pending ? 'opacity-70' : ''}`}
-                        >
-                          {!isMine && (
-                            <p className="text-[10px] font-semibold mb-1">{message.senderName}</p>
-                          )}
-                          <p className="whitespace-pre-wrap">{message.content}</p>
-                          <p className="mt-1 text-[10px] opacity-70">
-                            {new Date(message.createdAt).toLocaleTimeString('en-US', {
-                              hour: '2-digit',
-                              minute: '2-digit'
-                            })}
-                          </p>
-                        </div>
-                      </div>
-                    );
-                  })
-                )}
-              </div>
-              <div className="flex items-center gap-2">
-                <input
-                  className="flex-1 h-9 rounded-md border border-input bg-transparent px-3 text-xs shadow-sm focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
-                  placeholder="Type a message..."
-                  value={chatInput}
-                  onChange={(event) => setChatInput(event.target.value)}
-                  onKeyDown={(event) => {
-                    if (event.key === 'Enter') {
-                      event.preventDefault();
-                      handleSendMessage();
-                    }
+          {!isOnlineRoom && (
+            <Card className="flex-1 flex flex-col overflow-hidden min-h-[320px]">
+              <CardHeader className="pb-2">
+                <CardTitle className="text-base flex items-center justify-between">
+                  <span>Room chat</span>
+                  <span className="text-xs text-muted-foreground">
+                    {socketReady ? 'Live' : 'Connecting...'}
+                  </span>
+                </CardTitle>
+              </CardHeader>
+              <CardContent className="flex-1 min-h-0 flex flex-col gap-3">
+                <div
+                  ref={chatScrollRef}
+                  className="flex-1 min-h-0 overflow-y-auto space-y-2 rounded-lg border border-gray-100 bg-white/80 p-3"
+                  onScroll={(event) => {
+                    const target = event.currentTarget;
+                    const distanceFromBottom =
+                      target.scrollHeight - target.scrollTop - target.clientHeight;
+                    chatAutoScrollRef.current = distanceFromBottom < 32;
                   }}
-                />
-                <Button size="sm" onClick={handleSendMessage} disabled={!chatInput.trim() || !socketReady}>
-                  Send
-                </Button>
-              </div>
-            </CardContent>
-          </Card>
+                >
+                  {chatMessages.length === 0 ? (
+                    <div className="h-full flex items-center justify-center text-xs text-gray-400">
+                      No messages yet. Say hi!
+                    </div>
+                  ) : (
+                    chatMessages.map((message) => {
+                      const isMine = message.senderId === currentUserId;
+                      return (
+                        <div
+                          key={message.id}
+                          className={`flex ${isMine ? 'justify-end' : 'justify-start'}`}
+                        >
+                          <div
+                            className={`max-w-[80%] rounded-2xl px-3 py-2 text-xs ${
+                              isMine ? 'bg-emerald-500 text-white' : 'bg-gray-100 text-gray-700'
+                            } ${message.pending ? 'opacity-70' : ''}`}
+                          >
+                            {!isMine && (
+                              <p className="text-[10px] font-semibold mb-1">{message.senderName}</p>
+                            )}
+                            <p className="whitespace-pre-wrap">{message.content}</p>
+                            <p className="mt-1 text-[10px] opacity-70">
+                              {new Date(message.createdAt).toLocaleTimeString('en-US', {
+                                hour: '2-digit',
+                                minute: '2-digit'
+                              })}
+                            </p>
+                          </div>
+                        </div>
+                      );
+                    })
+                  )}
+                </div>
+                <div className="flex items-center gap-2">
+                  <input
+                    className="flex-1 h-9 rounded-md border border-input bg-transparent px-3 text-xs shadow-sm focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
+                    placeholder="Type a message..."
+                    value={chatInput}
+                    onChange={(event) => setChatInput(event.target.value)}
+                    onKeyDown={(event) => {
+                      if (event.key === 'Enter') {
+                        event.preventDefault();
+                        handleSendMessage();
+                      }
+                    }}
+                  />
+                  <Button size="sm" onClick={handleSendMessage} disabled={!chatInput.trim() || !socketReady}>
+                    Send
+                  </Button>
+                </div>
+              </CardContent>
+            </Card>
+          )}
         </div>
       </div>
 
       {/* Room Info (only shown before study time) */}
-      {!isStudyTime && group && (
+      {!showQuizPanel && group && !group.meetingId && (
         <Card>
           <CardHeader className="pb-2">
             <CardTitle className="text-lg">Meeting Information</CardTitle>
@@ -1136,13 +1137,6 @@ export function StudyRoomPage({
               <span className="text-muted-foreground">🕐</span>
               <span><strong>Time:</strong> {group.time || '—'}</span>
             </div>
-            {group.meetingId && (
-              <div className="pt-2 border-t">
-                <Button onClick={openZoomFloating} variant="outline" className="w-full">
-                  Open Zoom
-                </Button>
-              </div>
-            )}
             <div className="text-sm text-muted-foreground pt-2 border-t">
               {(group.participantsWithNames ?? []).length} / {group.maxParticipants} participants
             </div>
