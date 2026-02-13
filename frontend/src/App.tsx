@@ -26,6 +26,34 @@ import {
   MoreVertical,
   Trash2
 } from 'lucide-react';
+
+// Custom icon for Study Groups (people with book)
+const StudyGroupIcon = ({ className }: { className?: string }) => (
+  <svg
+    xmlns="http://www.w3.org/2000/svg"
+    viewBox="0 0 24 24"
+    fill="currentColor"
+    className={className}
+  >
+    {/* Three people on top */}
+    {/* Left person */}
+    <circle cx="5" cy="4" r="1.5" />
+    <path d="M3 8c0-1.1.9-2 2-2s2 .9 2 2v1H3V8z" />
+    
+    {/* Middle person */}
+    <circle cx="12" cy="3" r="1.5" />
+    <path d="M10 7c0-1.1.9-2 2-2s2 .9 2 2v1h-4V7z" />
+    
+    {/* Right person */}
+    <circle cx="19" cy="4" r="1.5" />
+    <path d="M17 8c0-1.1.9-2 2-2s2 .9 2 2v1h-4V8z" />
+    
+    {/* Open book at bottom */}
+    <path d="M4 12h7c.6 0 1 .4 1 1v8c0-.6-.4-1-1-1H4V12z" />
+    <path d="M20 12h-7c-.6 0-1 .4-1 1v8c0-.6.4-1 1-1h7V12z" />
+    <path d="M12 12v9" strokeWidth="0.5" stroke="currentColor" />
+  </svg>
+);
 import { toast } from 'sonner';
 
 type Page = 'login' | 'register' | 'dashboard' | 'study-groups' | 'solo-study' | 'friends' | 'settings' | 'profile' | 'friend-detail' | 'room' | 'meeting';
@@ -712,7 +740,7 @@ export default function App() {
             }`}
             title="Study groups"
           >
-            <Users className="size-5" />
+            <StudyGroupIcon className="size-5" />
           </button>
           
           <div className="relative">
@@ -788,7 +816,7 @@ export default function App() {
             }`}
             title="Friends"
           >
-            <UserCircle className="size-5" />
+            <Users className="size-5" />
           </button>
         </nav>
 

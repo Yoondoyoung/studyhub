@@ -89,9 +89,17 @@ export function StudyGroupsPage({ accessToken, userId, currentUserUsername, room
   const [newGroup, setNewGroup] = useState(defaultGroupForm);
   const [zoomForm, setZoomForm] = useState({ topic: '', durationMinutes: 60 });
   const [creatingZoom, setCreatingZoom] = useState(false);
+  const [previousGroups, setPreviousGroups] = useState<StudyGroup[]>([]);
 
   useEffect(() => {
     fetchGroups();
+    
+    // Poll for updates every 5 seconds to detect new applicants
+    const interval = setInterval(() => {
+      fetchGroups();
+    }, 5000);
+    
+    return () => clearInterval(interval);
   }, []);
 
   const fetchGroups = async () => {
@@ -132,7 +140,37 @@ export function StudyGroupsPage({ accessToken, userId, currentUserUsername, room
       ];
       
       const fetchedGroups = data.groups || [];
-      setGroups([...sampleGroups, ...fetchedGroups]);
+      const newGroups = [...sampleGroups, ...fetchedGroups];
+      
+      // Check for new applicants in groups where current user is host
+      if (previousGroups.length > 0) {
+        newGroups.forEach((newGroup) => {
+          if (newGroup.hostId === userId) {
+            const oldGroup = previousGroups.find((g) => g.id === newGroup.id);
+            if (oldGroup) {
+              const oldApplicants = oldGroup.applicants || [];
+              const newApplicants = newGroup.applicants || [];
+              
+              // Find newly added applicants
+              const addedApplicants = newApplicants.filter(
+                (applicantId: string) => !oldApplicants.includes(applicantId)
+              );
+              
+              // Show toast for each new applicant
+              addedApplicants.forEach((applicantId: string) => {
+                const applicantInfo = newGroup.applicantsWithNames?.find(
+                  (item: { id: string; username: string }) => item.id === applicantId
+                );
+                const applicantName = applicantInfo?.username || `User ${applicantId.slice(0, 8)}`;
+                toast.info(`📬 New applicant: ${applicantName} wants to join "${newGroup.topic}"`);
+              });
+            }
+          }
+        });
+      }
+      
+      setPreviousGroups(newGroups);
+      setGroups(newGroups);
     } catch (error) {
       console.error('Failed to fetch study groups:', error);
     }
@@ -767,7 +805,7 @@ export function StudyGroupsPage({ accessToken, userId, currentUserUsername, room
                     </div>
                   )}
 
-                  {/* Action button: Zoom room → Join meeting; in-person → Join room (after start time) */}
+                  {/* Action button: Zoom room → Join meeting; in-person → Join room */}
                   {group.meetingId && onJoinMeeting && (
                     <Button
                       className="w-full bg-blue-600 text-white hover:bg-blue-700 font-semibold"
@@ -777,7 +815,7 @@ export function StudyGroupsPage({ accessToken, userId, currentUserUsername, room
                       Join Zoom meeting
                     </Button>
                   )}
-                  {!group.meetingId && isMeetingStarted && (isHost || isMember || !isFull) && (
+                  {!group.meetingId && (isHost || (isMember && !isFull)) && (
                     <Button
                       className="w-full bg-teal-600 text-white hover:bg-teal-700 font-semibold"
                       onClick={() => onJoinRoom(group.id)}
