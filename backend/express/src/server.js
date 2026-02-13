@@ -111,7 +111,8 @@ const GOOGLE_CLIENT_SECRET = process.env.GOOGLE_CLIENT_SECRET ?? "";
 const GOOGLE_REDIRECT_URI =
   process.env.GOOGLE_REDIRECT_URI ?? "http://localhost:8080/google/oauth/callback";
 
-const GOOGLE_SCOPES = ["https://www.googleapis.com/auth/calendar.readonly"];
+// NOTE: We need write scope so calendar drag/edit updates Google too.
+const GOOGLE_SCOPES = ["https://www.googleapis.com/auth/calendar.events"];
 
 const googleConfigReady = () =>
   Boolean(GOOGLE_CLIENT_ID && GOOGLE_CLIENT_SECRET && GOOGLE_REDIRECT_URI);
@@ -168,7 +169,10 @@ app.get("/google/oauth/url", async (req, res) => {
     const oauth2 = createGoogleOAuthClient();
 
     const existingTokens = await getStoredGoogleTokens(user.id);
-    const needsConsent = !existingTokens?.refresh_token;
+    const forceConsent =
+      String(req.query.force || "").toLowerCase() === "1" ||
+      String(req.query.force || "").toLowerCase() === "true";
+    const needsConsent = forceConsent || !existingTokens?.refresh_token;
 
     const state = crypto.randomUUID();
     await kvSet(googleOauthStateKey(state), {
@@ -287,6 +291,153 @@ app.get("/google/calendar/events", async (req, res) => {
   }
 });
 
+app.patch("/google/calendar/events/:eventId", async (req, res) => {
+  try {
+    if (!googleConfigReady()) {
+      return res.status(500).json({ error: "Google OAuth is not configured" });
+    }
+
+    const user = await requireUser(req);
+    const tokens = await getStoredGoogleTokens(user.id);
+    if (!tokens) {
+      return res.status(401).json({ error: "GOOGLE_NOT_CONNECTED" });
+    }
+
+    const eventId = req.params.eventId ? String(req.params.eventId) : "";
+    if (!eventId) return res.status(400).json({ error: "eventId is required" });
+
+    const {
+      calendarId = "primary",
+      start,
+      end,
+      summary,
+      description,
+      location,
+    } = req.body ?? {};
+
+    if (!start || !end) {
+      return res.status(400).json({ error: "start and end are required" });
+    }
+
+    const oauth2 = createGoogleOAuthClient();
+    oauth2.setCredentials(tokens);
+    oauth2.on("tokens", (t) => {
+      saveGoogleTokens(user.id, t).catch(() => {});
+    });
+
+    const calendar = google.calendar({ version: "v3", auth: oauth2 });
+    const resp = await calendar.events.patch({
+      calendarId: String(calendarId || "primary"),
+      eventId,
+      requestBody: {
+        start,
+        end,
+        ...(summary !== undefined ? { summary: String(summary || "") } : {}),
+        ...(description !== undefined ? { description: String(description || "") } : {}),
+        ...(location !== undefined ? { location: String(location || "") } : {}),
+      },
+    });
+
+    return res.json({ event: resp.data });
+  } catch (err) {
+    const msg = String(err?.message ?? err);
+    if (msg.includes("Unauthorized")) return res.status(401).json({ error: "Unauthorized" });
+    console.error("Google event patch error:", err);
+    // Pass through common Google API errors for the client to react (e.g. insufficientPermissions)
+    return res.status(500).json({ error: msg || "Failed to update Google Calendar event" });
+  }
+});
+
+app.delete("/google/calendar/events/:eventId", async (req, res) => {
+  try {
+    if (!googleConfigReady()) {
+      return res.status(500).json({ error: "Google OAuth is not configured" });
+    }
+
+    const user = await requireUser(req);
+    const tokens = await getStoredGoogleTokens(user.id);
+    if (!tokens) {
+      return res.status(401).json({ error: "GOOGLE_NOT_CONNECTED" });
+    }
+
+    const eventId = req.params.eventId ? String(req.params.eventId) : "";
+    if (!eventId) return res.status(400).json({ error: "eventId is required" });
+
+    const calendarId = req.query.calendarId ? String(req.query.calendarId) : "primary";
+
+    const oauth2 = createGoogleOAuthClient();
+    oauth2.setCredentials(tokens);
+    oauth2.on("tokens", (t) => {
+      saveGoogleTokens(user.id, t).catch(() => {});
+    });
+
+    const calendar = google.calendar({ version: "v3", auth: oauth2 });
+    await calendar.events.delete({
+      calendarId: String(calendarId || "primary"),
+      eventId,
+    });
+
+    return res.status(204).send("");
+  } catch (err) {
+    const msg = String(err?.message ?? err);
+    if (msg.includes("Unauthorized")) return res.status(401).json({ error: "Unauthorized" });
+    console.error("Google event delete error:", err);
+    return res.status(500).json({ error: msg || "Failed to delete Google Calendar event" });
+  }
+});
+
+app.post("/google/calendar/events", async (req, res) => {
+  try {
+    if (!googleConfigReady()) {
+      return res.status(500).json({ error: "Google OAuth is not configured" });
+    }
+
+    const user = await requireUser(req);
+    const tokens = await getStoredGoogleTokens(user.id);
+    if (!tokens) {
+      return res.status(401).json({ error: "GOOGLE_NOT_CONNECTED" });
+    }
+
+    const {
+      calendarId = "primary",
+      start,
+      end,
+      summary,
+      description,
+      location,
+    } = req.body ?? {};
+
+    if (!start || !end) {
+      return res.status(400).json({ error: "start and end are required" });
+    }
+
+    const oauth2 = createGoogleOAuthClient();
+    oauth2.setCredentials(tokens);
+    oauth2.on("tokens", (t) => {
+      saveGoogleTokens(user.id, t).catch(() => {});
+    });
+
+    const calendar = google.calendar({ version: "v3", auth: oauth2 });
+    const resp = await calendar.events.insert({
+      calendarId: String(calendarId || "primary"),
+      requestBody: {
+        start,
+        end,
+        ...(summary !== undefined ? { summary: String(summary || "") } : {}),
+        ...(description !== undefined ? { description: String(description || "") } : {}),
+        ...(location !== undefined ? { location: String(location || "") } : {}),
+      },
+    });
+
+    return res.json({ event: resp.data });
+  } catch (err) {
+    const msg = String(err?.message ?? err);
+    if (msg.includes("Unauthorized")) return res.status(401).json({ error: "Unauthorized" });
+    console.error("Google event create error:", err);
+    return res.status(500).json({ error: msg || "Failed to create Google Calendar event" });
+  }
+});
+
 const getConversationId = (userId, friendId) =>
   [userId, friendId].sort().join(":");
 
@@ -334,6 +485,10 @@ app.post("/auth/signup", async (req, res) => {
       classes: [],
       preferences: {},
       allowTodoView: false,
+      totalStudyMinutes: 0,
+      unlockedMedals: [],
+      equippedMedal: null,
+      currentSessionStart: null,
       createdAt: new Date().toISOString(),
     });
 
@@ -658,6 +813,55 @@ app.get("/study-time/:date", async (req, res) => {
   }
 });
 
+app.get("/study-time-range", async (req, res) => {
+  try {
+    const user = await requireUser(req);
+    const start = String(req.query.start || "");
+    const end = String(req.query.end || "");
+    if (!start || !end) return res.status(400).json({ error: "Start and end required" });
+
+    const startDate = new Date(`${start}T00:00:00Z`);
+    const endDate = new Date(`${end}T00:00:00Z`);
+    if (Number.isNaN(startDate.getTime()) || Number.isNaN(endDate.getTime())) {
+      return res.status(400).json({ error: "Invalid date" });
+    }
+    if (startDate > endDate) {
+      return res.status(400).json({ error: "Invalid range" });
+    }
+
+    const maxDays = 400;
+    const prefix = `study-time:${user.id}:`;
+    const totals = {};
+
+    const { data: rows, error } = await serviceSupabase
+      .from(KV_TABLE)
+      .select("key, value")
+      .like("key", `${prefix}%`);
+    if (error) throw new Error(error.message);
+
+    const dateTotals = {};
+    for (const row of rows ?? []) {
+      const key = String(row?.key || "");
+      if (!key.startsWith(prefix)) continue;
+      const dateKey = key.slice(prefix.length, prefix.length + 10);
+      dateTotals[dateKey] = Number(row?.value?.total || 0);
+    }
+
+    let current = new Date(startDate);
+    let count = 0;
+    while (current <= endDate && count < maxDays) {
+      const dateKey = current.toISOString().split("T")[0];
+      totals[dateKey] = Number(dateTotals[dateKey] || 0);
+      current.setUTCDate(current.getUTCDate() + 1);
+      count += 1;
+    }
+
+    return res.json({ totals });
+  } catch {
+    return res.status(401).json({ error: "Unauthorized" });
+  }
+});
+
 app.get("/study-groups", async (_req, res) => {
   try {
     const raw = await kvGetByPrefix("study-group:");
@@ -755,10 +959,14 @@ app.post("/study-groups/:id/presence", async (req, res) => {
     }
     const profile = await kvGet(`user:${user.id}`);
     const username = profile?.username ?? profile?.email ?? user.id?.slice(0, 8) ?? "User";
+    const equippedMedal = profile?.equippedMedal || null;
     const presence = (await kvGet(`room-presence:${groupId}`)) || { users: [] };
     const existing = presence.users.find((u) => u.id === user.id);
     if (!existing) {
-      presence.users.push({ id: user.id, username });
+      presence.users.push({ id: user.id, username, medal: equippedMedal });
+    } else {
+      // Update medal if user already in presence
+      existing.medal = equippedMedal;
     }
     await kvSet(`room-presence:${groupId}`, presence);
     if (!group.participantFirstJoinAt) group.participantFirstJoinAt = {};
@@ -2382,6 +2590,137 @@ app.put("/settings", async (req, res) => {
     return res.json({ settings: updated });
   } catch {
     return res.status(401).json({ error: "Unauthorized" });
+  }
+});
+
+// Study Timer APIs
+app.post("/study/timer/start", async (req, res) => {
+  try {
+    const user = await requireUser(req);
+    const userProfile = await kvGet(`user:${user.id}`);
+    
+    if (userProfile.currentSessionStart) {
+      return res.status(400).json({ error: "Timer already running" });
+    }
+    
+    const updated = {
+      ...userProfile,
+      currentSessionStart: new Date().toISOString(),
+    };
+    await kvSet(`user:${user.id}`, updated);
+    
+    return res.json({ 
+      success: true, 
+      startTime: updated.currentSessionStart 
+    });
+  } catch (err) {
+    if (String(err?.message).includes("Unauthorized"))
+      return res.status(401).json({ error: "Unauthorized" });
+    return res.status(500).json({ error: String(err?.message ?? err) });
+  }
+});
+
+app.post("/study/timer/stop", async (req, res) => {
+  try {
+    const user = await requireUser(req);
+    const userProfile = await kvGet(`user:${user.id}`);
+    
+    if (!userProfile.currentSessionStart) {
+      return res.status(400).json({ error: "No timer running" });
+    }
+    
+    const startTime = new Date(userProfile.currentSessionStart);
+    const endTime = new Date();
+    const elapsedMinutes = Math.floor((endTime - startTime) / 60000);
+    
+    const newTotalMinutes = (userProfile.totalStudyMinutes || 0) + elapsedMinutes;
+    
+    // Check for medal unlocks
+    const unlockedMedals = [...(userProfile.unlockedMedals || [])];
+    const medalThresholds = [
+      { name: 'bronze', minutes: 100 },
+      { name: 'silver', minutes: 1000 },
+      { name: 'gold', minutes: 10000 }
+    ];
+    
+    const newlyUnlocked = [];
+    for (const medal of medalThresholds) {
+      if (newTotalMinutes >= medal.minutes && !unlockedMedals.includes(medal.name)) {
+        unlockedMedals.push(medal.name);
+        newlyUnlocked.push(medal.name);
+      }
+    }
+    
+    const updated = {
+      ...userProfile,
+      totalStudyMinutes: newTotalMinutes,
+      unlockedMedals,
+      currentSessionStart: null,
+    };
+    await kvSet(`user:${user.id}`, updated);
+    
+    return res.json({ 
+      success: true,
+      elapsedMinutes,
+      totalMinutes: newTotalMinutes,
+      newlyUnlocked
+    });
+  } catch (err) {
+    if (String(err?.message).includes("Unauthorized"))
+      return res.status(401).json({ error: "Unauthorized" });
+    return res.status(500).json({ error: String(err?.message ?? err) });
+  }
+});
+
+app.get("/study/stats", async (req, res) => {
+  try {
+    const user = await requireUser(req);
+    const userProfile = await kvGet(`user:${user.id}`);
+    
+    return res.json({
+      totalMinutes: userProfile.totalStudyMinutes || 0,
+      unlockedMedals: userProfile.unlockedMedals || [],
+      equippedMedal: userProfile.equippedMedal || null,
+      isTimerRunning: !!userProfile.currentSessionStart,
+      sessionStartTime: userProfile.currentSessionStart || null,
+    });
+  } catch (err) {
+    if (String(err?.message).includes("Unauthorized"))
+      return res.status(401).json({ error: "Unauthorized" });
+    return res.status(500).json({ error: String(err?.message ?? err) });
+  }
+});
+
+app.post("/study/medals/equip", async (req, res) => {
+  try {
+    const user = await requireUser(req);
+    const { medal } = req.body || {};
+    const userProfile = await kvGet(`user:${user.id}`);
+    
+    // Validate medal
+    if (medal !== null && !['bronze', 'silver', 'gold'].includes(medal)) {
+      return res.status(400).json({ error: "Invalid medal" });
+    }
+    
+    // Check if user has unlocked the medal
+    if (medal && !(userProfile.unlockedMedals || []).includes(medal)) {
+      return res.status(403).json({ error: "Medal not unlocked" });
+    }
+    
+    const updated = {
+      ...userProfile,
+      equippedMedal: medal,
+    };
+    await kvSet(`user:${user.id}`, updated);
+    
+    return res.json({ 
+      success: true,
+      equippedMedal: medal 
+    });
+  } catch (err) {
+    if (String(err?.message).includes("Unauthorized"))
+      return res.status(401).json({ error: "Unauthorized" });
+    return res.status(500).json({ error: String(err?.message ?? err) });
   }
 });
 
