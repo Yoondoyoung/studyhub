@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback, useRef } from 'react';
+import { useState, useEffect, useCallback, useRef, useMemo } from 'react';
 import { Button } from './ui/button';
 import { Input } from './ui/input';
 import { Label } from './ui/label';
@@ -19,6 +19,7 @@ import {
   GripVertical,
   Undo2,
   CheckCircle2,
+  RefreshCcw,
 } from 'lucide-react';
 import { toast } from 'sonner';
 import { apiBase } from '../utils/api';
@@ -35,6 +36,8 @@ export interface CalendarTask {
   completed?: boolean;
   completedAt?: string | null;
   createdAt?: string;
+  source?: 'local' | 'google';
+  url?: string | null;
 }
 
 interface CalendarPageProps {
@@ -59,7 +62,10 @@ function toDateStr(d: Date) {
 
 export function CalendarPage({ accessToken }: CalendarPageProps) {
   const [currentMonth, setCurrentMonth] = useState<Date>(new Date());
-  const [tasks, setTasks] = useState<CalendarTask[]>([]);
+  const [localTasks, setLocalTasks] = useState<CalendarTask[]>([]);
+  const [googleTasks, setGoogleTasks] = useState<CalendarTask[]>([]);
+  const [googleConnected, setGoogleConnected] = useState(false);
+  const [googleSyncing, setGoogleSyncing] = useState(false);
   const [selectedTask, setSelectedTask] = useState<CalendarTask | null>(null);
   const [isAddDialogOpen, setIsAddDialogOpen] = useState(false);
   const [isDragOver, setIsDragOver] = useState(false);
@@ -76,7 +82,7 @@ export function CalendarPage({ accessToken }: CalendarPageProps) {
         headers: { Authorization: `Bearer ${accessToken}` },
       });
       const data = await res.json();
-      setTasks(data.tasks || []);
+      setLocalTasks(data.tasks || []);
     } catch (err) {
       console.error('Failed to fetch calendar tasks:', err);
     }
@@ -86,8 +92,9 @@ export function CalendarPage({ accessToken }: CalendarPageProps) {
     fetchTasks();
   }, [fetchTasks]);
 
-  const activeTasks = tasks.filter((t) => !t.completed);
-  const completedTasks = tasks.filter((t) => t.completed);
+  const activeLocalTasks = useMemo(() => localTasks.filter((t) => !t.completed), [localTasks]);
+  const completedTasks = useMemo(() => localTasks.filter((t) => t.completed), [localTasks]);
+  const activeTasks = useMemo(() => [...activeLocalTasks, ...googleTasks], [activeLocalTasks, googleTasks]);
 
   const tasksByDate = activeTasks.reduce<Record<string, CalendarTask[]>>((acc, t) => {
     const d = t.deadline;
@@ -149,7 +156,7 @@ export function CalendarPage({ accessToken }: CalendarPageProps) {
         return;
       }
       if (data.tasks?.length) {
-        setTasks((prev) => [...prev, ...data.tasks]);
+        setLocalTasks((prev) => [...prev, ...data.tasks]);
         toast.success(`${data.tasks.length} task(s) added to calendar.`);
       } else {
         toast.info('No tasks extracted from file.');
@@ -170,6 +177,10 @@ export function CalendarPage({ accessToken }: CalendarPageProps) {
   };
 
   const handleMarkComplete = async (task: CalendarTask) => {
+    if (task.source === 'google') {
+      toast.info('Google Calendar events are read-only.');
+      return;
+    }
     try {
       const res = await fetch(`${apiBase}/calendar/tasks/${task.id}`, {
         method: 'PUT',
@@ -185,7 +196,7 @@ export function CalendarPage({ accessToken }: CalendarPageProps) {
       });
       const data = await res.json();
       if (data.task) {
-        setTasks((prev) => prev.map((t) => (t.id === task.id ? data.task : t)));
+        setLocalTasks((prev) => prev.map((t) => (t.id === task.id ? data.task : t)));
         setSelectedTask(null);
         setEditTask(null);
         toast.success('Task completed.');
@@ -197,6 +208,10 @@ export function CalendarPage({ accessToken }: CalendarPageProps) {
   };
 
   const handleMarkIncomplete = async (task: CalendarTask) => {
+    if (task.source === 'google') {
+      toast.info('Google Calendar events are read-only.');
+      return;
+    }
     try {
       const res = await fetch(`${apiBase}/calendar/tasks/${task.id}`, {
         method: 'PUT',
@@ -212,7 +227,7 @@ export function CalendarPage({ accessToken }: CalendarPageProps) {
       });
       const data = await res.json();
       if (data.task) {
-        setTasks((prev) => prev.map((t) => (t.id === task.id ? data.task : t)));
+        setLocalTasks((prev) => prev.map((t) => (t.id === task.id ? data.task : t)));
         toast.success('Task restored.');
       }
     } catch (err) {
@@ -255,7 +270,7 @@ export function CalendarPage({ accessToken }: CalendarPageProps) {
       });
       const data = await res.json();
       if (data.task) {
-        setTasks((prev) => [...prev, data.task]);
+        setLocalTasks((prev) => [...prev, data.task]);
         setNewTask({ title: '', info: '', deadline: '', time: '' });
         setIsAddDialogOpen(false);
         toast.success('Task added.');
@@ -267,12 +282,16 @@ export function CalendarPage({ accessToken }: CalendarPageProps) {
   };
 
   const handleDeleteTask = async (task: CalendarTask) => {
+    if (task.source === 'google') {
+      toast.info('Google Calendar events are read-only.');
+      return;
+    }
     try {
       await fetch(`${apiBase}/calendar/tasks/${task.id}`, {
         method: 'DELETE',
         headers: { Authorization: `Bearer ${accessToken}` },
       });
-      setTasks((prev) => prev.filter((t) => t.id !== task.id));
+      setLocalTasks((prev) => prev.filter((t) => t.id !== task.id));
       setSelectedTask(null);
       setEditTask(null);
       toast.success('Task deleted.');
@@ -284,6 +303,10 @@ export function CalendarPage({ accessToken }: CalendarPageProps) {
 
   const handleUpdateTask = async () => {
     if (!editTask) return;
+    if (editTask.source === 'google') {
+      toast.info('Google Calendar events are read-only.');
+      return;
+    }
     if (!editTask.title.trim()) {
       toast.error('Please enter a title.');
       return;
@@ -307,7 +330,7 @@ export function CalendarPage({ accessToken }: CalendarPageProps) {
       });
       const data = await res.json();
       if (data.task) {
-        setTasks((prev) => prev.map((t) => (t.id === editTask.id ? data.task : t)));
+        setLocalTasks((prev) => prev.map((t) => (t.id === editTask.id ? data.task : t)));
         setSelectedTask(null);
         setEditTask(null);
         toast.success(willComplete ? 'Task completed.' : 'Task updated.');
@@ -336,7 +359,7 @@ export function CalendarPage({ accessToken }: CalendarPageProps) {
       const raw = e.dataTransfer.getData('application/json');
       if (!raw) return;
       const { taskId } = JSON.parse(raw);
-      const task = tasks.find((t) => t.id === taskId && !t.completed);
+      const task = localTasks.find((t) => t.id === taskId && !t.completed);
       if (task) handleMarkComplete(task);
     } catch {
       // ignore
@@ -363,15 +386,28 @@ export function CalendarPage({ accessToken }: CalendarPageProps) {
     compact?: boolean;
   }) => (
     <div
-      draggable
-      onDragStart={(e) => onTaskDragStart(e, task, source)}
-      onDragEnd={onTaskDragEnd}
+      draggable={task.source !== 'google'}
+      onDragStart={(e) => {
+        if (task.source === 'google') return;
+        onTaskDragStart(e, task, source);
+      }}
+      onDragEnd={() => {
+        if (task.source === 'google') return;
+        onTaskDragEnd();
+      }}
       className={cn(
-        'flex items-center gap-1 cursor-grab active:cursor-grabbing rounded bg-teal-50 text-teal-800 hover:bg-teal-100 transition-colors',
+        'flex items-center gap-1 rounded transition-colors',
+        task.source === 'google'
+          ? 'bg-sky-50 text-sky-800 hover:bg-sky-100 cursor-default'
+          : 'bg-teal-50 text-teal-800 hover:bg-teal-100 cursor-grab active:cursor-grabbing',
         compact ? 'text-[10px] px-1.5 py-1' : 'text-xs px-2 py-1.5',
         draggedTaskId === task.id && 'opacity-50'
       )}
       onClick={() => {
+        if (task.source === 'google') {
+          toast.info('Google Calendar events are read-only.');
+          return;
+        }
         setSelectedTask(task);
         setEditTask({ ...task });
       }}
@@ -383,6 +419,167 @@ export function CalendarPage({ accessToken }: CalendarPageProps) {
     </div>
   );
 
+  const getMonthRange = useCallback((d: Date) => {
+    const start = new Date(d.getFullYear(), d.getMonth(), 1);
+    start.setHours(0, 0, 0, 0);
+    const end = new Date(d.getFullYear(), d.getMonth() + 1, 0);
+    end.setHours(23, 59, 59, 999);
+    return { timeMin: start.toISOString(), timeMax: end.toISOString() };
+  }, []);
+
+  const toHHMM = useCallback((dt: Date) => {
+    const hh = String(dt.getHours()).padStart(2, '0');
+    const mm = String(dt.getMinutes()).padStart(2, '0');
+    return `${hh}:${mm}`;
+  }, []);
+
+  const toLocalDateStr = useCallback((dt: Date) => {
+    const y = String(dt.getFullYear());
+    const m = String(dt.getMonth() + 1).padStart(2, '0');
+    const d = String(dt.getDate()).padStart(2, '0');
+    return `${y}-${m}-${d}`;
+  }, []);
+
+  const mapGoogleEventsToTasks = useCallback((events: any[]): CalendarTask[] => {
+    if (!Array.isArray(events)) return [];
+    return events
+      .map((e) => {
+        const id = e?.id ? `gcal:${String(e.id)}` : null;
+        const summary = String(e?.summary || 'Google event');
+        const start = e?.start || {};
+        const startRaw: string | null = start.dateTime || start.date || null;
+        if (!id || !startRaw) return null;
+
+        const isAllDay = Boolean(start.date && !start.dateTime);
+        const startDate = new Date(startRaw);
+        const deadline = isAllDay
+          ? String(start.date)
+          : toLocalDateStr(startDate);
+        const time = isAllDay ? null : toHHMM(startDate);
+
+        const infoParts = [e?.location, e?.description].filter(Boolean).map(String);
+        return {
+          id,
+          title: summary,
+          info: infoParts.join(' • '),
+          deadline,
+          time,
+          completed: false,
+          completedAt: null,
+          source: 'google',
+          url: e?.htmlLink ? String(e.htmlLink) : null,
+        } as CalendarTask;
+      })
+      .filter(Boolean) as CalendarTask[];
+  }, [toHHMM, toLocalDateStr]);
+
+  const fetchGoogleStatus = useCallback(async () => {
+    try {
+      const res = await fetch(`${apiBase}/google/status`, {
+        headers: { Authorization: `Bearer ${accessToken}` },
+      });
+      const data = await res.json();
+      const connected = Boolean(data?.connected);
+      setGoogleConnected(connected);
+      return connected;
+    } catch {
+      setGoogleConnected(false);
+      return false;
+    }
+  }, [accessToken]);
+
+  const fetchGoogleEventsForMonth = useCallback(
+    async (month: Date) => {
+      setGoogleSyncing(true);
+      try {
+        const { timeMin, timeMax } = getMonthRange(month);
+        const res = await fetch(
+          `${apiBase}/google/calendar/events?timeMin=${encodeURIComponent(
+            timeMin
+          )}&timeMax=${encodeURIComponent(timeMax)}`,
+          { headers: { Authorization: `Bearer ${accessToken}` } }
+        );
+        const data = await res.json();
+        if (!res.ok) {
+          if (data?.error === 'GOOGLE_NOT_CONNECTED') {
+            setGoogleConnected(false);
+            setGoogleTasks([]);
+            return;
+          }
+          throw new Error(data?.error || 'Failed to sync');
+        }
+        const mapped = mapGoogleEventsToTasks(data?.events || []);
+        setGoogleTasks(mapped);
+        setGoogleConnected(true);
+      } finally {
+        setGoogleSyncing(false);
+      }
+    },
+    [accessToken, getMonthRange, mapGoogleEventsToTasks]
+  );
+
+  const startGoogleConnect = useCallback(async () => {
+    const res = await fetch(`${apiBase}/google/oauth/url`, {
+      headers: { Authorization: `Bearer ${accessToken}` },
+    });
+    const data = await res.json();
+    if (!res.ok || !data?.url) {
+      throw new Error(data?.error || 'Failed to start Google login');
+    }
+    window.location.href = String(data.url);
+  }, [accessToken]);
+
+  const handleGoogleSync = useCallback(async () => {
+    setGoogleSyncing(true);
+    try {
+      const connected = await fetchGoogleStatus();
+      if (!connected) {
+        await startGoogleConnect();
+        return;
+      }
+      await fetchGoogleEventsForMonth(currentMonth);
+      toast.success('Google Calendar synced.');
+    } catch (err) {
+      console.error(err);
+      toast.error('Google sync failed.');
+      setGoogleSyncing(false);
+    }
+  }, [currentMonth, fetchGoogleEventsForMonth, fetchGoogleStatus, startGoogleConnect]);
+
+  useEffect(() => {
+    const params = new URLSearchParams(window.location.search);
+    const googleParam = params.get('google');
+    if (!googleParam) return;
+
+    // Clean up URL without breaking hash routing
+    params.delete('google');
+    const nextSearch = params.toString();
+    window.history.replaceState(
+      {},
+      '',
+      `${window.location.pathname}${nextSearch ? `?${nextSearch}` : ''}${window.location.hash}`
+    );
+
+    if (googleParam === 'connected') {
+      toast.success('Google connected.');
+      setGoogleConnected(true);
+      fetchGoogleEventsForMonth(currentMonth).catch(() => {});
+      return;
+    }
+    if (googleParam === 'error') {
+      toast.error('Google connection failed.');
+    }
+  }, [currentMonth, fetchGoogleEventsForMonth]);
+
+  useEffect(() => {
+    fetchGoogleStatus().catch(() => {});
+  }, [fetchGoogleStatus]);
+
+  useEffect(() => {
+    if (!googleConnected) return;
+    fetchGoogleEventsForMonth(currentMonth).catch(() => {});
+  }, [currentMonth, googleConnected, fetchGoogleEventsForMonth]);
+
   return (
     <div className="rounded-[36px] bg-white/60 shadow-[0_30px_80px_rgba(15,23,42,0.08)] p-6 h-[720px] overflow-hidden">
       <div className="h-full flex flex-col min-w-0">
@@ -393,6 +590,17 @@ export function CalendarPage({ accessToken }: CalendarPageProps) {
             <div className="flex items-center justify-between px-4 py-3 border-b border-gray-100 shrink-0">
               <h2 className="text-base font-semibold text-gray-900">Calendar</h2>
               <div className="flex items-center gap-2">
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={handleGoogleSync}
+                  disabled={googleSyncing}
+                  className="gap-2"
+                  title={googleConnected ? 'Sync Google Calendar' : 'Connect Google Calendar'}
+                >
+                  <RefreshCcw className={cn('size-4', googleSyncing && 'animate-spin')} />
+                  Google sync
+                </Button>
                 <Button
                   variant="outline"
                   size="icon"
