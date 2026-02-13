@@ -92,6 +92,13 @@ export function StudyGroupsPage({ accessToken, userId, currentUserUsername, room
 
   useEffect(() => {
     fetchGroups();
+    
+    // Poll for updates every 5 seconds to keep group list fresh
+    const interval = setInterval(() => {
+      fetchGroups();
+    }, 5000);
+    
+    return () => clearInterval(interval);
   }, []);
 
   const fetchGroups = async () => {
@@ -132,7 +139,10 @@ export function StudyGroupsPage({ accessToken, userId, currentUserUsername, room
       ];
       
       const fetchedGroups = data.groups || [];
-      setGroups([...sampleGroups, ...fetchedGroups]);
+      const newGroups = [...sampleGroups, ...fetchedGroups];
+      
+      // Notifications are now handled globally in App.tsx
+      setGroups(newGroups);
     } catch (error) {
       console.error('Failed to fetch study groups:', error);
     }
@@ -767,7 +777,7 @@ export function StudyGroupsPage({ accessToken, userId, currentUserUsername, room
                     </div>
                   )}
 
-                  {/* Action button: Zoom room → Join meeting; in-person → Join room (after start time) */}
+                  {/* Action button: Zoom room → Join meeting; in-person → Join room */}
                   {group.meetingId && onJoinMeeting && (
                     <Button
                       className="w-full bg-blue-600 text-white hover:bg-blue-700 font-semibold"
@@ -777,7 +787,7 @@ export function StudyGroupsPage({ accessToken, userId, currentUserUsername, room
                       Join Zoom meeting
                     </Button>
                   )}
-                  {!group.meetingId && isMeetingStarted && (isHost || isMember || !isFull) && (
+                  {!group.meetingId && (isHost || isMember) && (
                     <Button
                       className="w-full bg-teal-600 text-white hover:bg-teal-700 font-semibold"
                       onClick={() => onJoinRoom(group.id)}

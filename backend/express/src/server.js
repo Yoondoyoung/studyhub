@@ -334,6 +334,10 @@ app.post("/auth/signup", async (req, res) => {
       classes: [],
       preferences: {},
       allowTodoView: false,
+      totalStudyMinutes: 0,
+      unlockedMedals: [],
+      equippedMedal: null,
+      currentSessionStart: null,
       createdAt: new Date().toISOString(),
     });
 
@@ -804,10 +808,14 @@ app.post("/study-groups/:id/presence", async (req, res) => {
     }
     const profile = await kvGet(`user:${user.id}`);
     const username = profile?.username ?? profile?.email ?? user.id?.slice(0, 8) ?? "User";
+    const equippedMedal = profile?.equippedMedal || null;
     const presence = (await kvGet(`room-presence:${groupId}`)) || { users: [] };
     const existing = presence.users.find((u) => u.id === user.id);
     if (!existing) {
-      presence.users.push({ id: user.id, username });
+      presence.users.push({ id: user.id, username, medal: equippedMedal });
+    } else {
+      // Update medal if user already in presence
+      existing.medal = equippedMedal;
     }
     await kvSet(`room-presence:${groupId}`, presence);
     if (!group.participantFirstJoinAt) group.participantFirstJoinAt = {};
@@ -2431,6 +2439,137 @@ app.put("/settings", async (req, res) => {
     return res.json({ settings: updated });
   } catch {
     return res.status(401).json({ error: "Unauthorized" });
+  }
+});
+
+// Study Timer APIs
+app.post("/study/timer/start", async (req, res) => {
+  try {
+    const user = await requireUser(req);
+    const userProfile = await kvGet(`user:${user.id}`);
+    
+    if (userProfile.currentSessionStart) {
+      return res.status(400).json({ error: "Timer already running" });
+    }
+    
+    const updated = {
+      ...userProfile,
+      currentSessionStart: new Date().toISOString(),
+    };
+    await kvSet(`user:${user.id}`, updated);
+    
+    return res.json({ 
+      success: true, 
+      startTime: updated.currentSessionStart 
+    });
+  } catch (err) {
+    if (String(err?.message).includes("Unauthorized"))
+      return res.status(401).json({ error: "Unauthorized" });
+    return res.status(500).json({ error: String(err?.message ?? err) });
+  }
+});
+
+app.post("/study/timer/stop", async (req, res) => {
+  try {
+    const user = await requireUser(req);
+    const userProfile = await kvGet(`user:${user.id}`);
+    
+    if (!userProfile.currentSessionStart) {
+      return res.status(400).json({ error: "No timer running" });
+    }
+    
+    const startTime = new Date(userProfile.currentSessionStart);
+    const endTime = new Date();
+    const elapsedMinutes = Math.floor((endTime - startTime) / 60000);
+    
+    const newTotalMinutes = (userProfile.totalStudyMinutes || 0) + elapsedMinutes;
+    
+    // Check for medal unlocks
+    const unlockedMedals = [...(userProfile.unlockedMedals || [])];
+    const medalThresholds = [
+      { name: 'bronze', minutes: 100 },
+      { name: 'silver', minutes: 1000 },
+      { name: 'gold', minutes: 10000 }
+    ];
+    
+    const newlyUnlocked = [];
+    for (const medal of medalThresholds) {
+      if (newTotalMinutes >= medal.minutes && !unlockedMedals.includes(medal.name)) {
+        unlockedMedals.push(medal.name);
+        newlyUnlocked.push(medal.name);
+      }
+    }
+    
+    const updated = {
+      ...userProfile,
+      totalStudyMinutes: newTotalMinutes,
+      unlockedMedals,
+      currentSessionStart: null,
+    };
+    await kvSet(`user:${user.id}`, updated);
+    
+    return res.json({ 
+      success: true,
+      elapsedMinutes,
+      totalMinutes: newTotalMinutes,
+      newlyUnlocked
+    });
+  } catch (err) {
+    if (String(err?.message).includes("Unauthorized"))
+      return res.status(401).json({ error: "Unauthorized" });
+    return res.status(500).json({ error: String(err?.message ?? err) });
+  }
+});
+
+app.get("/study/stats", async (req, res) => {
+  try {
+    const user = await requireUser(req);
+    const userProfile = await kvGet(`user:${user.id}`);
+    
+    return res.json({
+      totalMinutes: userProfile.totalStudyMinutes || 0,
+      unlockedMedals: userProfile.unlockedMedals || [],
+      equippedMedal: userProfile.equippedMedal || null,
+      isTimerRunning: !!userProfile.currentSessionStart,
+      sessionStartTime: userProfile.currentSessionStart || null,
+    });
+  } catch (err) {
+    if (String(err?.message).includes("Unauthorized"))
+      return res.status(401).json({ error: "Unauthorized" });
+    return res.status(500).json({ error: String(err?.message ?? err) });
+  }
+});
+
+app.post("/study/medals/equip", async (req, res) => {
+  try {
+    const user = await requireUser(req);
+    const { medal } = req.body || {};
+    const userProfile = await kvGet(`user:${user.id}`);
+    
+    // Validate medal
+    if (medal !== null && !['bronze', 'silver', 'gold'].includes(medal)) {
+      return res.status(400).json({ error: "Invalid medal" });
+    }
+    
+    // Check if user has unlocked the medal
+    if (medal && !(userProfile.unlockedMedals || []).includes(medal)) {
+      return res.status(403).json({ error: "Medal not unlocked" });
+    }
+    
+    const updated = {
+      ...userProfile,
+      equippedMedal: medal,
+    };
+    await kvSet(`user:${user.id}`, updated);
+    
+    return res.json({ 
+      success: true,
+      equippedMedal: medal 
+    });
+  } catch (err) {
+    if (String(err?.message).includes("Unauthorized"))
+      return res.status(401).json({ error: "Unauthorized" });
+    return res.status(500).json({ error: String(err?.message ?? err) });
   }
 });
 

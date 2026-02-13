@@ -210,14 +210,25 @@ export function DashboardPage({ accessToken, onOpenChat }: DashboardPageProps) {
       interval = setInterval(() => {
         const stored = loadStoredTimer();
         if (stored && stored.todoId === activeTimer) {
-          setTimerSeconds(getElapsedSeconds(stored));
+          const elapsed = getElapsedSeconds(stored);
+          setTimerSeconds(elapsed);
+          
+          // Auto-complete task when reaching planned duration
+          const activeTodo = todos.find(t => t.id === activeTimer);
+          if (activeTodo && activeTodo.plannedDuration) {
+            const plannedSeconds = activeTodo.plannedDuration * 60;
+            if (elapsed >= plannedSeconds) {
+              stopTimer(activeTodo);
+              toast.success('🎉 Task completed!');
+            }
+          }
         }
       }, 1000);
     }
     return () => {
       if (interval) clearInterval(interval);
     };
-  }, [activeTimer]);
+  }, [activeTimer, todos]);
 
   useEffect(() => {
     try {
@@ -540,15 +551,29 @@ export function DashboardPage({ accessToken, onOpenChat }: DashboardPageProps) {
     }
   };
 
-  const startTimer = (todoId: string) => {
-    const timerState = {
-      todoId,
-      startTime: Date.now(),
-      baseSeconds: 0
-    };
-    localStorage.setItem(TIMER_STORAGE_KEY, JSON.stringify(timerState));
-    setActiveTimer(todoId);
-    setTimerSeconds(0);
+  const startTimer = async (todoId: string) => {
+    try {
+      // Call backend API to start timer
+      await fetch(`${apiBase}/study/timer/start`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${accessToken}`
+        }
+      });
+      
+      const timerState = {
+        todoId,
+        startTime: Date.now(),
+        baseSeconds: 0
+      };
+      localStorage.setItem(TIMER_STORAGE_KEY, JSON.stringify(timerState));
+      setActiveTimer(todoId);
+      setTimerSeconds(0);
+    } catch (error) {
+      console.error('Failed to start timer:', error);
+      toast.error('Failed to start timer');
+    }
   };
 
   const stopTimer = async (todo: Todo) => {
@@ -567,6 +592,24 @@ export function DashboardPage({ accessToken, onOpenChat }: DashboardPageProps) {
     setTimerSeconds(0);
 
     try {
+      // Call backend API to stop timer and track study time
+      const timerResponse = await fetch(`${apiBase}/study/timer/stop`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${accessToken}`
+        }
+      });
+      const timerData = await timerResponse.json();
+      
+      // Show medal unlock notification if any
+      if (timerData.newlyUnlocked && timerData.newlyUnlocked.length > 0) {
+        for (const medal of timerData.newlyUnlocked) {
+          const medalEmoji = medal === 'bronze' ? '🥉' : medal === 'silver' ? '🥈' : '🥇';
+          toast.success(`${medalEmoji} Unlocked ${medal.toUpperCase()} medal!`);
+        }
+      }
+
       await Promise.all([
         fetch(`${apiBase}/study-time`, {
           method: 'POST',
@@ -948,6 +991,12 @@ export function DashboardPage({ accessToken, onOpenChat }: DashboardPageProps) {
                       : 'bg-rose-100 text-rose-700';
 
                   const isActive = activeTimer === todo.id;
+                  const currentSeconds = isActive ? timerSeconds : (todo.actualDuration || 0);
+                  const targetSeconds = (todo.plannedDuration || 0) * 60;
+                  const progressPercentForCircle = targetSeconds > 0 ? Math.min((currentSeconds / targetSeconds) * 100, 100) : 0;
+                  const radius = 16;
+                  const circumference = 2 * Math.PI * radius;
+                  const strokeDashoffset = circumference - (progressPercentForCircle / 100) * circumference;
 
                   return (
                     <div
@@ -971,12 +1020,36 @@ export function DashboardPage({ accessToken, onOpenChat }: DashboardPageProps) {
                           }
                         }
                       }}
-                      className={`bg-white rounded-2xl p-4 shadow-sm border border-white/70 flex flex-col justify-between min-h-[160px] cursor-pointer hover:shadow-md ${
+                      className={`bg-white rounded-2xl p-4 shadow-sm border border-white/70 flex flex-col justify-between min-h-[160px] cursor-pointer hover:shadow-md transition-all ${
                         isActive ? 'ring-2 ring-emerald-300' : ''
                       }`}
                     >
                       <div className="flex items-start justify-between">
-                        <div className="size-10 rounded-full bg-gray-100" />
+                        <div className="relative size-10">
+                          <svg className="size-10 -rotate-90" viewBox="0 0 36 36">
+                            <circle
+                              cx="18"
+                              cy="18"
+                              r={radius}
+                              fill="none"
+                              className="stroke-gray-200"
+                              strokeWidth="3"
+                            />
+                            <circle
+                              cx="18"
+                              cy="18"
+                              r={radius}
+                              fill="none"
+                              className={`transition-all duration-300 ${
+                                progressPercentForCircle >= 100 ? 'stroke-emerald-500' : 'stroke-teal-500'
+                              }`}
+                              strokeWidth="3"
+                              strokeDasharray={circumference}
+                              strokeDashoffset={strokeDashoffset}
+                              strokeLinecap="round"
+                            />
+                          </svg>
+                        </div>
                         <button
                           className="text-sm text-gray-400 hover:text-gray-600"
                           onClick={(event) => {
