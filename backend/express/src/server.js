@@ -276,6 +276,172 @@ app.delete("/todos/:id", async (req, res) => {
   }
 });
 
+// Calendar tasks
+const extractFileContent = async (file) => {
+  let content = "";
+  if (file.mimetype === "application/pdf" || file.originalname.endsWith(".pdf")) {
+    const pdfData = await pdfParse(file.buffer);
+    content = pdfData.text;
+  } else if (file.mimetype.startsWith("image/")) {
+    const base64Data = file.buffer.toString("base64");
+    const response = await openai.chat.completions.create({
+      model: "gpt-4o-mini",
+      messages: [{
+        role: "user",
+        content: [
+          { type: "text", text: "Extract all text from this image. Include any task lists, deadlines, or to-do items." },
+          { type: "image_url", image_url: { url: `data:image/jpeg;base64,${base64Data}`, detail: "high" } }
+        ]
+      }],
+      max_tokens: 2000,
+    });
+    content = response.choices[0].message.content || "";
+  } else if (file.mimetype.startsWith("text/") || file.originalname.match(/\.(txt|md|doc|docx)$/i)) {
+    content = file.buffer.toString("utf-8");
+  } else {
+    throw new Error("Unsupported file type. Use PDF, image, or text files.");
+  }
+  return content;
+};
+
+app.post("/calendar/tasks/extract-from-file", upload.single("file"), async (req, res) => {
+  try {
+    const user = await requireUser(req);
+    const file = req.file;
+    if (!file) return res.status(400).json({ error: "No file uploaded" });
+
+    const content = await extractFileContent(file);
+    if (!content?.trim()) return res.status(400).json({ error: "File is empty or unreadable" });
+
+    const response = await openai.chat.completions.create({
+      model: "gpt-4o-mini",
+      messages: [
+        {
+          role: "system",
+          content: `You are a task extraction assistant. Extract tasks from the given content. Return a JSON array of objects. Each object must have: title (string), info (string - description/details), deadline (string - ISO date YYYY-MM-DD, or null if unknown), time (string - HH:MM in 24h format, or null if unknown). Use today's date (${new Date().toISOString().split("T")[0]}) as reference for relative dates. If time is mentioned (e.g. "at 3pm", "by 14:00"), include it. Respond ONLY with valid JSON array. Example: [{"title":"Submit report","info":"Quarterly report for Q1","deadline":"2025-02-15","time":"14:00"}]`
+        },
+        {
+          role: "user",
+          content: content.substring(0, 8000)
+        }
+      ],
+      max_tokens: 2000,
+    });
+
+    const raw = response.choices[0].message.content?.trim() || "[]";
+    let tasks = [];
+    try {
+      const parsed = JSON.parse(raw.replace(/```json?\s*|\s*```/g, ""));
+      tasks = Array.isArray(parsed) ? parsed : [];
+    } catch {
+      tasks = [];
+    }
+
+    const saved = [];
+    for (const t of tasks) {
+      const taskId = crypto.randomUUID();
+      const deadline = t.deadline || new Date().toISOString().split("T")[0];
+      const time = t.time && /^\d{1,2}:\d{2}$/.test(String(t.time).trim()) ? String(t.time).trim() : null;
+      const task = {
+        id: taskId,
+        userId: user.id,
+        title: String(t.title || "Untitled").trim(),
+        info: String(t.info || "").trim(),
+        deadline,
+        time: time || null,
+        completed: false,
+        completedAt: null,
+        createdAt: new Date().toISOString(),
+      };
+      await kvSet(`calendar-task:${user.id}:${taskId}`, task);
+      saved.push(task);
+    }
+
+    return res.json({ tasks: saved });
+  } catch (err) {
+    console.error("Calendar extract error:", err);
+    if (String(err?.message).includes("Unauthorized")) return res.status(401).json({ error: "Unauthorized" });
+    return res.status(500).json({ error: String(err?.message ?? err) });
+  }
+});
+
+app.get("/calendar/tasks", async (req, res) => {
+  try {
+    const user = await requireUser(req);
+    const raw = await kvGetByPrefix(`calendar-task:${user.id}:`);
+    const tasks = raw.map((t) => t).filter(Boolean);
+    return res.json({ tasks });
+  } catch {
+    return res.status(401).json({ error: "Unauthorized" });
+  }
+});
+
+app.post("/calendar/tasks", async (req, res) => {
+  try {
+    const user = await requireUser(req);
+    const { title, info, deadline, time } = req.body ?? {};
+    const taskId = crypto.randomUUID();
+    const dateStr = deadline || new Date().toISOString().split("T")[0];
+    const timeStr = time && /^\d{1,2}:\d{2}$/.test(String(time).trim()) ? String(time).trim() : null;
+    const task = {
+      id: taskId,
+      userId: user.id,
+      title: String(title || "Untitled").trim(),
+      info: String(info || "").trim(),
+      deadline: dateStr,
+      time: timeStr,
+      completed: false,
+      completedAt: null,
+      createdAt: new Date().toISOString(),
+    };
+    await kvSet(`calendar-task:${user.id}:${taskId}`, task);
+    return res.json({ task });
+  } catch {
+    return res.status(401).json({ error: "Unauthorized" });
+  }
+});
+
+app.put("/calendar/tasks/:id", async (req, res) => {
+  try {
+    const user = await requireUser(req);
+    const taskId = req.params.id;
+    const existing = await kvGet(`calendar-task:${user.id}:${taskId}`);
+    if (!existing) return res.status(404).json({ error: "Task not found" });
+    const { title, info, deadline, time, completed } = req.body ?? {};
+    const timeStr = time !== undefined
+      ? (time && /^\d{1,2}:\d{2}$/.test(String(time).trim()) ? String(time).trim() : null)
+      : existing.time;
+    const isComplete = completed !== undefined ? Boolean(completed) : existing.completed;
+    const completedAt = isComplete
+      ? (existing.completedAt || new Date().toISOString())
+      : null;
+    const updated = {
+      ...existing,
+      title: title !== undefined ? String(title).trim() : existing.title,
+      info: info !== undefined ? String(info).trim() : existing.info,
+      deadline: deadline !== undefined ? String(deadline) : existing.deadline,
+      time: timeStr,
+      completed: isComplete,
+      completedAt,
+    };
+    await kvSet(`calendar-task:${user.id}:${taskId}`, updated);
+    return res.json({ task: updated });
+  } catch {
+    return res.status(401).json({ error: "Unauthorized" });
+  }
+});
+
+app.delete("/calendar/tasks/:id", async (req, res) => {
+  try {
+    const user = await requireUser(req);
+    const taskId = req.params.id;
+    await kvDel(`calendar-task:${user.id}:${taskId}`);
+    return res.json({ success: true });
+  } catch {
+    return res.status(401).json({ error: "Unauthorized" });
+  }
+});
+
 app.post("/study-time", async (req, res) => {
   try {
     const user = await requireUser(req);
