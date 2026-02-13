@@ -123,6 +123,7 @@ export function StudyRoomPage({
   const [currentTime, setCurrentTime] = useState(new Date());
   const [completionStatus, setCompletionStatus] = useState<{ completed: number; total: number; allCompleted: boolean }>({ completed: 0, total: 0, allCompleted: false });
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const [isReviewMode, setIsReviewMode] = useState(false);
   
   // Personal Timer States
   const [isTimerRunning, setIsTimerRunning] = useState(false);
@@ -388,7 +389,25 @@ export function StudyRoomPage({
           try {
             const progress = JSON.parse(savedProgress);
             setCurrentQuestionIndex(progress.currentQuestionIndex || 0);
-            setUserAnswers(progress.userAnswers || {});
+            const restoredAnswers = progress.userAnswers || {};
+            setUserAnswers(restoredAnswers);
+            
+            // Sync restored answers to backend
+            for (const [questionIdStr, answer] of Object.entries(restoredAnswers)) {
+              const questionId = parseInt(questionIdStr);
+              try {
+                await fetch(`${apiBase}/study-groups/${groupId}/quiz/answer`, {
+                  method: 'POST',
+                  headers: {
+                    ...auth(accessToken),
+                    'Content-Type': 'application/json',
+                  },
+                  body: JSON.stringify({ questionId, answer }),
+                });
+              } catch (syncError) {
+                console.error('Failed to sync answer to backend:', syncError);
+              }
+            }
           } catch (e) {
             console.error('Failed to parse saved progress', e);
           }
@@ -727,6 +746,7 @@ export function StudyRoomPage({
                     onClick={() => {
                       setShowQuizCompleted(false);
                       setCurrentQuestionIndex(0);
+                      setIsReviewMode(true);
                     }}
                     className="w-full"
                   >
@@ -812,20 +832,34 @@ export function StudyRoomPage({
             /* Quiz View */
             <div className="flex-1 flex flex-col p-6">
               <div className="mb-4 flex items-center justify-between pb-4 border-b">
-                <h3 className="text-lg font-bold">Group Quiz</h3>
+                <h3 className="text-lg font-bold">{isReviewMode ? 'Review Quiz' : 'Group Quiz'}</h3>
                 <div className="flex items-center gap-4">
                   <span className="text-sm text-muted-foreground">
                     Question {currentQuestionIndex + 1} / {quiz.questions.length}
                   </span>
-                  <Button
-                    variant="outline"
-                    size="sm"
-                    onClick={handleViewResults}
-                    disabled={!completionStatus.allCompleted}
-                    title={!completionStatus.allCompleted ? `Waiting for others (${completionStatus.completed}/${completionStatus.total} completed)` : 'View results'}
-                  >
-                    View Results
-                  </Button>
+                  {!isReviewMode && (
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      onClick={handleViewResults}
+                      disabled={!completionStatus.allCompleted}
+                      title={!completionStatus.allCompleted ? `Waiting for others (${completionStatus.completed}/${completionStatus.total} completed)` : 'View results'}
+                    >
+                      View Results
+                    </Button>
+                  )}
+                  {isReviewMode && (
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      onClick={() => {
+                        setIsReviewMode(false);
+                        setShowQuizCompleted(true);
+                      }}
+                    >
+                      Exit Review
+                    </Button>
+                  )}
                 </div>
               </div>
 
@@ -839,17 +873,34 @@ export function StudyRoomPage({
                     <div className="space-y-3">
                       {currentQuestion.options.map((option, idx) => {
                         const isSelected = userAnswers[currentQuestion.id] === idx;
+                        const isCorrect = idx === currentQuestion.correctAnswer;
+                        const isWrong = isReviewMode && isSelected && !isCorrect;
+                        
+                        let buttonClass = 'w-full p-4 text-left rounded-lg border-2 transition-all ';
+                        if (isReviewMode) {
+                          if (isCorrect) {
+                            buttonClass += 'border-green-500 bg-green-50 ';
+                          } else if (isWrong) {
+                            buttonClass += 'border-red-500 bg-red-50 ';
+                          } else {
+                            buttonClass += 'border-gray-200 bg-gray-50 ';
+                          }
+                        } else {
+                          buttonClass += isSelected
+                            ? 'border-teal-500 bg-teal-50 '
+                            : 'border-gray-200 hover:border-teal-300 hover:bg-gray-50 ';
+                        }
+                        
                         return (
                           <button
                             key={idx}
-                            onClick={() => handleAnswerQuestion(currentQuestion.id, idx)}
-                            className={`w-full p-4 text-left rounded-lg border-2 transition-all ${
-                              isSelected
-                                ? 'border-teal-500 bg-teal-50'
-                                : 'border-gray-200 hover:border-teal-300 hover:bg-gray-50'
-                            }`}
+                            onClick={() => !isReviewMode && handleAnswerQuestion(currentQuestion.id, idx)}
+                            disabled={isReviewMode}
+                            className={buttonClass}
                           >
                             <span className="font-semibold">{String.fromCharCode(65 + idx)}.</span> {option}
+                            {isReviewMode && isCorrect && <span className="ml-2 text-green-600 font-bold">✓ Correct</span>}
+                            {isReviewMode && isWrong && <span className="ml-2 text-red-600 font-bold">✗ Your Answer</span>}
                           </button>
                         );
                       })}
