@@ -162,15 +162,13 @@ export function StudyRoomPage({
     };
   }, [isTimerRunning, timerStartTime]);
 
-  // Fetch room details
+  // Fetch room details (UI display only - no permission checking)
   useEffect(() => {
     let cancelled = false;
-    let retryCount = 0;
-    const maxRetries = 3;
     
     const fetchGroup = async () => {
       try {
-        console.log('[StudyRoomPage] fetchGroup start', { groupId, currentUserId });
+        console.log('[StudyRoomPage] fetchGroup start', { groupId });
         const res = await fetch(`${apiBase}/study-groups/${groupId}`, {
           headers: auth(accessToken),
         });
@@ -179,25 +177,7 @@ export function StudyRoomPage({
         console.log('[StudyRoomPage] fetchGroup data', data);
         if (!cancelled && data.group) {
           setGroup(data.group);
-          if (!data.group.participants?.includes(currentUserId)) {
-            // If not a participant yet, retry a few times (in case we just got accepted)
-            if (retryCount < maxRetries) {
-              retryCount++;
-              setTimeout(() => {
-                if (!cancelled) fetchGroup();
-              }, 1000);
-            } else {
-              console.log('[StudyRoomPage] user not participant after retries; blocking join', {
-                currentUserId,
-                participants: data.group.participants,
-              });
-              setJoinBlocked(true);
-              setLoading(false);
-            }
-          } else {
-            // Participant confirmed, stop loading
-            setLoading(false);
-          }
+          setLoading(false);
         }
       } catch (e) {
         if (!cancelled) console.error('Failed to fetch room', e);
@@ -207,23 +187,19 @@ export function StudyRoomPage({
     
     fetchGroup();
     return () => { cancelled = true; };
-  }, [groupId, accessToken, currentUserId]);
+  }, [groupId, accessToken]);
 
-  // Join presence on mount - try even if joinBlocked to trigger auto-add logic
+  // Join presence - server decides permission (single source of truth)
   useEffect(() => {
+    if (!group) return; // Wait for group to load
+    
     let cancelled = false;
-    (async () => {
+    let retryCount = 0;
+    const maxRetries = 1; // Allow one retry for auto-add logic
+    
+    const tryJoinPresence = async () => {
       try {
-        // Wait for group to be loaded first
-        if (!group) return;
-        
-        console.log('[StudyRoomPage] join presence effect', {
-          groupId,
-          joinBlocked,
-          hasGroup: !!group,
-          participants: group?.participants,
-          currentUserId,
-        });
+        console.log('[StudyRoomPage] trying to join presence', { groupId, retryCount, joinBlocked });
         
         const res = await fetch(`${apiBase}/study-groups/${groupId}/presence`, {
           method: 'POST',
@@ -232,40 +208,57 @@ export function StudyRoomPage({
         console.log('[StudyRoomPage] presence POST status', res.status);
         
         if (!res.ok) {
-          if (!cancelled && res.status === 403) {
-            // Only set joinBlocked if we're sure user is not accepted
-            // (presence POST might auto-add them, so retry once)
-            if (!joinBlocked) {
+          if (res.status === 403) {
+            // Server says "Not accepted"
+            if (retryCount < maxRetries && !joinBlocked) {
+              // Retry once (server might auto-add on second attempt)
+              retryCount++;
+              setTimeout(() => {
+                if (!cancelled) tryJoinPresence();
+              }, 500);
+              return;
+            }
+            // After retry or already blocked, show error
+            if (!cancelled && !joinBlocked) {
               setJoinBlocked(true);
               toast.error('You need to be accepted to join this room.');
             }
+            return;
+          }
+          // Other errors
+          if (!cancelled) {
+            console.error('[StudyRoomPage] presence POST failed', res.status);
           }
           return;
         }
         
-        // Success - user is now in participants (either was already or auto-added)
+        // Success - server confirmed user can join
         if (res.ok && !cancelled) {
+          console.log('[StudyRoomPage] presence POST succeeded - user can join');
           joinedRef.current = true;
-          // If we were blocked, unblock now since presence POST succeeded
-          if (joinBlocked) {
-            console.log('[StudyRoomPage] presence POST succeeded, unblocking join');
-            setJoinBlocked(false);
-            // Refresh group data to get updated participants
-            const groupRes = await fetch(`${apiBase}/study-groups/${groupId}`, {
-              headers: auth(accessToken),
-            });
-            const groupData = await groupRes.json();
-            if (groupData.group) {
-              setGroup(groupData.group);
-            }
+          setJoinBlocked(false); // Clear any previous block
+          
+          // Refresh group data to get updated participants (for UI display)
+          const groupRes = await fetch(`${apiBase}/study-groups/${groupId}`, {
+            headers: auth(accessToken),
+          });
+          const groupData = await groupRes.json();
+          if (groupData.group && !cancelled) {
+            setGroup(groupData.group);
           }
         }
       } catch (e) {
         if (!cancelled) console.error('Failed to join presence', e);
       }
-    })();
+    };
+    
+    // Only try if not already blocked (unless it's the first attempt)
+    if (!joinBlocked || retryCount === 0) {
+      tryJoinPresence();
+    }
+    
     return () => { cancelled = true; };
-  }, [groupId, accessToken, group, currentUserId]);
+  }, [groupId, accessToken, group]);
 
   // Fetch room chat history
   useEffect(() => {
