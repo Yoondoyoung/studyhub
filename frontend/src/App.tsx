@@ -709,8 +709,6 @@ export default function App() {
                   
                   if (isNowParticipant) {
                     toast.success(`✅ You've been accepted to "${newGroup.topic}"!`, { duration: 5000 });
-                  } else {
-                    toast.error(`❌ Your application to "${newGroup.topic}" was rejected`, { duration: 5000 });
                   }
                 }
               }
@@ -829,6 +827,18 @@ export default function App() {
 
         if (payload?.type === 'friend:request:rejected') {
           toast.error('Your friend request was rejected.');
+          return;
+        }
+
+        if (payload?.type === 'study-group:application:accepted') {
+          const topic = payload?.topic || 'this study group';
+          toast.success(`✅ You've been accepted to "${topic}"!`, { duration: 5000 });
+          return;
+        }
+
+        if (payload?.type === 'study-group:application:rejected') {
+          const topic = payload?.topic || 'this study group';
+          toast.error(`❌ Your application to "${topic}" was rejected`, { duration: 5000 });
           return;
         }
 

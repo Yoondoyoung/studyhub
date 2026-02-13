@@ -1126,8 +1126,18 @@ app.post("/study-groups/:id/manage", async (req, res) => {
       if (!group.participants.includes(applicantId)) {
         group.participants.push(applicantId);
       }
+      sendToUser(String(applicantId), {
+        type: "study-group:application:accepted",
+        groupId,
+        topic: group.topic,
+      });
     } else if (action === "reject") {
       group.applicants = group.applicants.filter((id) => id !== applicantId);
+      sendToUser(String(applicantId), {
+        type: "study-group:application:rejected",
+        groupId,
+        topic: group.topic,
+      });
     }
 
     await kvSet(`study-group:${groupId}`, group);
@@ -3555,7 +3565,10 @@ wss.on("connection", async (socket, req) => {
           const roomId = String(payload?.roomId ?? "");
           if (!roomId) return;
           const group = await kvGet(`study-group:${roomId}`);
-          if (!group || !group.participants?.includes(socket.userId)) {
+          const canJoin =
+            Boolean(group) &&
+            (group.participants?.includes(socket.userId) || group.hostId === socket.userId);
+          if (!canJoin) {
             socket.send(JSON.stringify({ type: "room:error", message: "Not accepted" }));
             return;
           }
@@ -3577,7 +3590,10 @@ wss.on("connection", async (socket, req) => {
           if (!roomId || !content) return;
           if (!socket.userId) return;
           const group = await kvGet(`study-group:${roomId}`);
-          if (!group || !group.participants?.includes(socket.userId)) {
+          const canSend =
+            Boolean(group) &&
+            (group.participants?.includes(socket.userId) || group.hostId === socket.userId);
+          if (!canSend) {
             socket.send(JSON.stringify({ type: "room:error", message: "Not accepted" }));
             return;
           }
