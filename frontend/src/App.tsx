@@ -1153,6 +1153,8 @@ export default function App() {
                 setSelectedSessionId(sessionId);
                 navigateTo('solo-study');
               }}
+              socketRef={socketRef}
+              socketReady={socketReady}
             />
           )}
           {currentPage === 'meeting' && currentMeetingId && (

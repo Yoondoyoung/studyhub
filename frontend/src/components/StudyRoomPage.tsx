@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef, useMemo } from 'react';
+import { useState, useEffect, useRef, useMemo, useCallback } from 'react';
 import { Button } from './ui/button';
 import { Card, CardContent, CardHeader, CardTitle } from './ui/card';
 import {
@@ -44,6 +44,8 @@ interface StudyRoomPageProps {
   onLeaveRoom?: () => void;
   onJoinMeeting?: (meetingId: string) => void;
   onStartAiReview?: (sessionId: string) => void;
+  socketRef?: React.RefObject<WebSocket | null>;
+  socketReady?: boolean;
 }
 
 interface UploadedFile {
@@ -97,6 +99,8 @@ export function StudyRoomPage({
   onLeaveRoom,
   onJoinMeeting,
   onStartAiReview,
+  socketRef,
+  socketReady,
 }: StudyRoomPageProps) {
   const glassPanelClass =
     'bg-white/80 backdrop-blur border border-white/70 shadow-[0_16px_40px_rgba(15,23,42,0.10)]';
@@ -130,7 +134,7 @@ export function StudyRoomPage({
   const [completionStatus, setCompletionStatus] = useState<{ completed: number; total: number; allCompleted: boolean }>({ completed: 0, total: 0, allCompleted: false });
   const fileInputRef = useRef<HTMLInputElement>(null);
   const [isReviewMode, setIsReviewMode] = useState(false);
-  
+
   // Personal Timer States
   const [isTimerRunning, setIsTimerRunning] = useState(false);
   const [timerSeconds, setTimerSeconds] = useState(0);
@@ -160,7 +164,7 @@ export function StudyRoomPage({
   // Fetch room details (UI display only - no permission checking)
   useEffect(() => {
     let cancelled = false;
-    
+
     const fetchGroup = async () => {
       try {
         console.log('[StudyRoomPage] fetchGroup start', { groupId });
@@ -179,7 +183,7 @@ export function StudyRoomPage({
         if (!cancelled) setLoading(false);
       }
     };
-    
+
     fetchGroup();
     return () => { cancelled = true; };
   }, [groupId, accessToken]);
@@ -187,21 +191,21 @@ export function StudyRoomPage({
   // Join presence - server decides permission (single source of truth)
   useEffect(() => {
     if (!group) return; // Wait for group to load
-    
+
     let cancelled = false;
     let retryCount = 0;
     const maxRetries = 1; // Allow one retry for auto-add logic
-    
+
     const tryJoinPresence = async () => {
       try {
         console.log('[StudyRoomPage] trying to join presence', { groupId, retryCount, joinBlocked });
-        
+
         const res = await fetch(`${apiBase}/study-groups/${groupId}/presence`, {
           method: 'POST',
           headers: { ...auth(accessToken), 'Content-Type': 'application/json' },
         });
         console.log('[StudyRoomPage] presence POST status', res.status);
-        
+
         if (!res.ok) {
           if (res.status === 403) {
             // Server says "Not accepted"
@@ -227,7 +231,7 @@ export function StudyRoomPage({
           }
           return;
         }
-        
+
         // Success - server confirmed user can join
         if (res.ok && !cancelled) {
           console.log('[StudyRoomPage] presence POST succeeded - user can join');
@@ -239,14 +243,14 @@ export function StudyRoomPage({
         if (!cancelled) console.error('Failed to join presence', e);
       }
     };
-    
+
     // Always let server decide; we already cap retries inside
     tryJoinPresence();
-    
+
     return () => { cancelled = true; };
   }, [groupId, accessToken, group]);
 
-  // Fetch room chat history via HTTP polling (only when server allowed)
+  // Fetch room chat history once on mount (only when server allowed)
   useEffect(() => {
     if (!canJoinRoom) return;
     if (!group) return;
@@ -264,12 +268,60 @@ export function StudyRoomPage({
       }
     };
     fetchChat();
-    const interval = setInterval(fetchChat, 2000); // Poll every 2 seconds
     return () => {
       cancelled = true;
-      clearInterval(interval);
     };
   }, [groupId, accessToken, canJoinRoom, group?.meetingId, group]);
+
+  // WebSocket: join room & leave room lifecycle
+  useEffect(() => {
+    if (!canJoinRoom || !socketRef?.current || !socketReady) return;
+    if (!group || group.meetingId) return; // Online rooms: no room chat
+    const socket = socketRef.current;
+    if (socket.readyState !== WebSocket.OPEN) return;
+
+    console.log('[StudyRoomPage] sending room:join', groupId);
+    socket.send(JSON.stringify({ type: 'room:join', roomId: groupId }));
+
+    return () => {
+      if (socket.readyState === WebSocket.OPEN) {
+        console.log('[StudyRoomPage] sending room:leave', groupId);
+        socket.send(JSON.stringify({ type: 'room:leave', roomId: groupId }));
+      }
+    };
+  }, [groupId, canJoinRoom, socketReady, socketRef, group]);
+
+  // WebSocket: listen for room:message events
+  useEffect(() => {
+    if (!socketRef?.current || !socketReady) return;
+    if (!group || group.meetingId) return;
+    const socket = socketRef.current;
+
+    const handleMessage = (event: MessageEvent) => {
+      try {
+        const payload = JSON.parse(typeof event.data === 'string' ? event.data : event.data.toString());
+        if (payload?.type === 'room:message' && payload?.message) {
+          const msg = payload.message as RoomMessage;
+          if (msg.roomId !== groupId) return;
+          setChatMessages((prev) => {
+            // Deduplicate by clientId or id
+            if (msg.clientId && prev.some((m) => m.clientId === msg.clientId)) {
+              return prev.map((m) => (m.clientId === msg.clientId ? { ...msg, pending: false } : m));
+            }
+            if (prev.some((m) => m.id === msg.id)) return prev;
+            return [...prev, msg];
+          });
+        }
+      } catch {
+        // ignore parse errors
+      }
+    };
+
+    socket.addEventListener('message', handleMessage);
+    return () => {
+      socket.removeEventListener('message', handleMessage);
+    };
+  }, [groupId, socketReady, socketRef, group]);
 
   // Load quiz files
   useEffect(() => {
@@ -297,7 +349,7 @@ export function StudyRoomPage({
     if (quiz && quiz.questions) {
       const totalQuestions = quiz.questions.length;
       const answeredQuestions = Object.keys(userAnswers).length;
-      
+
       if (answeredQuestions === totalQuestions && answeredQuestions > 0) {
         setShowQuizCompleted(true);
       } else {
@@ -389,7 +441,7 @@ export function StudyRoomPage({
       const data = await res.json();
       if (data.quiz) {
         setQuiz(data.quiz);
-        
+
         // Restore quiz progress from localStorage
         const savedProgress = localStorage.getItem(`quiz-progress-${groupId}-${currentUserId}`);
         if (savedProgress) {
@@ -398,7 +450,7 @@ export function StudyRoomPage({
             setCurrentQuestionIndex(progress.currentQuestionIndex || 0);
             const restoredAnswers = progress.userAnswers || {};
             setUserAnswers(restoredAnswers);
-            
+
             // Sync restored answers to backend
             for (const [questionIdStr, answer] of Object.entries(restoredAnswers)) {
               const questionId = parseInt(questionIdStr);
@@ -487,10 +539,10 @@ export function StudyRoomPage({
       setCurrentQuestionIndex(0);
       setShowResults(false);
       setShowQuizCompleted(false);
-      
+
       // Clear saved progress for new quiz
       localStorage.removeItem(`quiz-progress-${groupId}-${currentUserId}`);
-      
+
       toast.success('Quiz generated!');
     } catch (error) {
       console.error('Generate quiz error:', error);
@@ -577,7 +629,7 @@ export function StudyRoomPage({
 
   const stopRoomTimer = async () => {
     if (!isTimerRunning) return;
-    
+
     try {
       const response = await fetch(`${apiBase}/study/timer/stop`, {
         method: 'POST',
@@ -587,11 +639,11 @@ export function StudyRoomPage({
         },
       });
       const data = await response.json();
-      
+
       setIsTimerRunning(false);
       setTimerStartTime(null);
       setTimerSeconds(0);
-      
+
       // Show medal unlock notification if any
       if (data.newlyUnlocked && data.newlyUnlocked.length > 0) {
         for (const medal of data.newlyUnlocked) {
@@ -599,7 +651,7 @@ export function StudyRoomPage({
           toast.success(`${medalEmoji} Unlocked ${medal.toUpperCase()} medal!`);
         }
       }
-      
+
       toast.success(`⏱️ Timer stopped! Logged ${data.elapsedMinutes} minutes`);
     } catch (error) {
       console.error('Failed to stop timer:', error);
@@ -612,7 +664,7 @@ export function StudyRoomPage({
     if (isTimerRunning) {
       await stopRoomTimer();
     }
-    
+
     setLeaveDialogOpen(false);
     if (joinedRef.current) {
       try {
@@ -620,7 +672,7 @@ export function StudyRoomPage({
           method: 'DELETE',
           headers: auth(accessToken),
         });
-      } catch (_) {}
+      } catch (_) { }
       joinedRef.current = false;
     }
     onLeaveRoom?.();
@@ -799,346 +851,345 @@ export function StudyRoomPage({
           /* After Study Time - Show Group Quiz */
           <div className={`lg:col-span-2 rounded-2xl ${glassPanelClass} h-[520px] min-h-[280px] flex flex-col`}>
             {showQuizCompleted && !showResults ? (
-            /* Quiz Completed View */
-            <div className="flex-1 flex items-center justify-center p-6">
-              <div className="text-center max-w-md">
+              /* Quiz Completed View */
+              <div className="flex-1 flex items-center justify-center p-6">
+                <div className="text-center max-w-md">
+                  <div className="mb-6">
+                    <div className="text-6xl mb-4">🎉</div>
+                    <h3 className="text-3xl font-bold mb-2 text-teal-600">Quiz Completed!</h3>
+                    <p className="text-muted-foreground">
+                      You've answered all {quiz?.questions.length} questions!
+                    </p>
+                  </div>
+
+                  {/* Completion Progress */}
+                  {!completionStatus.allCompleted && (
+                    <div className="bg-blue-50 border border-blue-200 rounded-lg p-4 mb-6">
+                      <div className="flex items-center justify-center gap-2 mb-2">
+                        <Loader2 className="size-5 text-blue-600 animate-spin" />
+                        <p className="text-sm font-semibold text-blue-900">
+                          Waiting for others...
+                        </p>
+                      </div>
+                      <p className="text-lg font-bold text-blue-700">
+                        {completionStatus.completed} / {completionStatus.total} completed
+                      </p>
+                      <p className="text-xs text-blue-600 mt-2">
+                        Results will be available when everyone finishes
+                      </p>
+                    </div>
+                  )}
+
+                  {completionStatus.allCompleted && (
+                    <div className="bg-green-50 border border-green-200 rounded-lg p-4 mb-6">
+                      <p className="text-sm font-semibold text-green-900">
+                        ✓ Everyone has completed the quiz!
+                      </p>
+                    </div>
+                  )}
+
+                  <div className="space-y-3">
+                    <Button
+                      variant="secondary"
+                      onClick={handleStartAiReview}
+                      size="lg"
+                      className="w-full"
+                      disabled={isCreatingAiReview}
+                    >
+                      {isCreatingAiReview ? (
+                        <>
+                          <Loader2 className="size-5 mr-2 animate-spin" />
+                          Creating AI Review...
+                        </>
+                      ) : (
+                        <>
+                          <BookOpen className="size-5 mr-2" />
+                          Start AI Review
+                        </>
+                      )}
+                    </Button>
+                    <Button
+                      onClick={handleViewResults}
+                      size="lg"
+                      className="w-full"
+                      disabled={!completionStatus.allCompleted}
+                    >
+                      <BookOpen className="size-5 mr-2" />
+                      View Results
+                    </Button>
+                    <Button
+                      variant="outline"
+                      onClick={() => {
+                        setShowQuizCompleted(false);
+                        setCurrentQuestionIndex(0);
+                        setIsReviewMode(true);
+                      }}
+                      className="w-full"
+                    >
+                      Review Quiz
+                    </Button>
+                    <Button
+                      variant="outline"
+                      onClick={() => setShowQuizSettings(true)}
+                      className="w-full"
+                    >
+                      Start New Quiz
+                    </Button>
+                  </div>
+                </div>
+              </div>
+            ) : showResults ? (
+              /* Results View */
+              <div className="flex-1 flex flex-col p-6 overflow-y-auto">
+                <div className="flex items-center justify-between mb-6">
+                  <h3 className="text-xl font-bold">Quiz Results</h3>
+                  <Button variant="outline" onClick={() => setShowResults(false)}>
+                    Back to Quiz
+                  </Button>
+                </div>
+
+                <div className="space-y-6">
+                  {quizResults.map((result, idx) => (
+                    <Card key={result.questionId} className="border-2">
+                      <CardHeader className="pb-3">
+                        <CardTitle className="text-base">
+                          Q{idx + 1}. {result.question}
+                        </CardTitle>
+                      </CardHeader>
+                      <CardContent className="space-y-3">
+                        <div className="space-y-1">
+                          {result.options.map((option, optIdx) => (
+                            <div
+                              key={optIdx}
+                              className={`p-2 rounded text-sm ${optIdx === result.correctAnswer
+                                  ? 'bg-green-50 border border-green-500 font-semibold'
+                                  : 'bg-gray-50'
+                                }`}
+                            >
+                              {String.fromCharCode(65 + optIdx)}. {option}
+                              {optIdx === result.correctAnswer && ' ✓'}
+                            </div>
+                          ))}
+                        </div>
+
+                        <div className="bg-blue-50 p-3 rounded">
+                          <p className="text-xs font-semibold text-blue-900 mb-1">Explanation:</p>
+                          <p className="text-sm text-gray-700">{result.explanation}</p>
+                        </div>
+
+                        <div className="flex gap-4 text-sm font-medium pt-2 border-t">
+                          <div className="flex items-center gap-2 text-green-700">
+                            <CheckCircle className="size-4" />
+                            <span>{result.correctCount} Correct</span>
+                          </div>
+                          <div className="flex items-center gap-2 text-red-700">
+                            <XCircle className="size-4" />
+                            <span>{result.incorrectCount} Wrong</span>
+                          </div>
+                          <div className="flex items-center gap-2 text-gray-500">
+                            <HelpCircle className="size-4" />
+                            <span>{result.unansweredCount} Unanswered</span>
+                          </div>
+                        </div>
+                      </CardContent>
+                    </Card>
+                  ))}
+                </div>
+
+                <div className="mt-6 pt-6 border-t text-center">
+                  <div className="flex items-center justify-center gap-3">
+                    <Button
+                      variant="secondary"
+                      onClick={handleStartAiReview}
+                      size="lg"
+                      disabled={isCreatingAiReview}
+                    >
+                      {isCreatingAiReview ? (
+                        <>
+                          <Loader2 className="size-5 mr-2 animate-spin" />
+                          Creating AI Review...
+                        </>
+                      ) : (
+                        <>
+                          <BookOpen className="size-5 mr-2" />
+                          Start AI Review
+                        </>
+                      )}
+                    </Button>
+                    <Button onClick={() => setShowQuizSettings(true)} size="lg">
+                      <BookOpen className="size-5 mr-2" />
+                      Start New Quiz
+                    </Button>
+                  </div>
+                </div>
+              </div>
+            ) : quiz ? (
+              /* Quiz View */
+              <div className="flex-1 flex flex-col p-6">
+                <div className="mb-4 flex items-center justify-between pb-4 border-b">
+                  <h3 className="text-lg font-bold">{isReviewMode ? 'Review Quiz' : 'Group Quiz'}</h3>
+                  <div className="flex items-center gap-4">
+                    <span className="text-sm text-muted-foreground">
+                      Question {currentQuestionIndex + 1} / {quiz.questions.length}
+                    </span>
+                    {!isReviewMode && (
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        onClick={handleViewResults}
+                        disabled={!completionStatus.allCompleted}
+                        title={!completionStatus.allCompleted ? `Waiting for others (${completionStatus.completed}/${completionStatus.total} completed)` : 'View results'}
+                      >
+                        View Results
+                      </Button>
+                    )}
+                    {isReviewMode && (
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        onClick={() => {
+                          setIsReviewMode(false);
+                          setShowQuizCompleted(true);
+                        }}
+                      >
+                        Exit Review
+                      </Button>
+                    )}
+                  </div>
+                </div>
+
+                {currentQuestion && (
+                  <div className="flex-1 flex flex-col space-y-6">
+                    <div>
+                      <h4 className="text-xl font-semibold mb-4">
+                        {currentQuestion.question}
+                      </h4>
+
+                      <div className="space-y-3">
+                        {currentQuestion.options.map((option, idx) => {
+                          const isSelected = userAnswers[currentQuestion.id] === idx;
+                          const isCorrect = idx === currentQuestion.correctAnswer;
+                          const isWrong = isReviewMode && isSelected && !isCorrect;
+
+                          let buttonClass = 'w-full p-4 text-left rounded-lg border-2 transition-all ';
+                          if (isReviewMode) {
+                            if (isCorrect) {
+                              buttonClass += 'border-green-500 bg-green-50 ';
+                            } else if (isWrong) {
+                              buttonClass += 'border-red-500 bg-red-50 ';
+                            } else {
+                              buttonClass += 'border-gray-200 bg-gray-50 ';
+                            }
+                          } else {
+                            buttonClass += isSelected
+                              ? 'border-teal-500 bg-teal-50 '
+                              : 'border-gray-200 hover:border-teal-300 hover:bg-gray-50 ';
+                          }
+
+                          return (
+                            <button
+                              key={idx}
+                              onClick={() => !isReviewMode && handleAnswerQuestion(currentQuestion.id, idx)}
+                              disabled={isReviewMode}
+                              className={buttonClass}
+                            >
+                              <span className="font-semibold">{String.fromCharCode(65 + idx)}.</span> {option}
+                              {isReviewMode && isCorrect && <span className="ml-2 text-green-600 font-bold">✓ Correct</span>}
+                              {isReviewMode && isWrong && <span className="ml-2 text-red-600 font-bold">✗ Your Answer</span>}
+                            </button>
+                          );
+                        })}
+                      </div>
+                    </div>
+
+                    <div className="mt-auto flex justify-between pt-6 border-t">
+                      <Button
+                        variant="outline"
+                        onClick={() => setCurrentQuestionIndex((prev) => Math.max(0, prev - 1))}
+                        disabled={currentQuestionIndex === 0}
+                      >
+                        Previous
+                      </Button>
+                      <Button
+                        onClick={() => setCurrentQuestionIndex((prev) => Math.min(quiz.questions.length - 1, prev + 1))}
+                        disabled={currentQuestionIndex === quiz.questions.length - 1}
+                      >
+                        Next
+                      </Button>
+                    </div>
+                  </div>
+                )}
+              </div>
+            ) : (
+              /* Upload & Generate Quiz View */
+              <div className="flex-1 flex flex-col p-6">
                 <div className="mb-6">
-                  <div className="text-6xl mb-4">🎉</div>
-                  <h3 className="text-3xl font-bold mb-2 text-teal-600">Quiz Completed!</h3>
-                  <p className="text-muted-foreground">
-                    You've answered all {quiz?.questions.length} questions!
+                  <h3 className="text-xl font-bold mb-2">Group Quiz</h3>
+                  <p className="text-sm text-muted-foreground">
+                    Upload study materials and generate a quiz for everyone!
                   </p>
                 </div>
 
-                {/* Completion Progress */}
-                {!completionStatus.allCompleted && (
-                  <div className="bg-blue-50 border border-blue-200 rounded-lg p-4 mb-6">
-                    <div className="flex items-center justify-center gap-2 mb-2">
-                      <Loader2 className="size-5 text-blue-600 animate-spin" />
-                      <p className="text-sm font-semibold text-blue-900">
-                        Waiting for others...
+                <div className="space-y-4 mb-6">
+                  <div className="flex items-center justify-between">
+                    <h4 className="font-semibold">Uploaded Files ({uploadedFiles.length}/{group.maxParticipants})</h4>
+                    <Button
+                      onClick={() => fileInputRef.current?.click()}
+                      disabled={isUploading || uploadedFiles.length >= group.maxParticipants}
+                      size="sm"
+                    >
+                      {isUploading ? (
+                        <><Loader2 className="size-4 mr-2 animate-spin" /> Uploading...</>
+                      ) : (
+                        <><Upload className="size-4 mr-2" /> Upload</>
+                      )}
+                    </Button>
+                    <input
+                      ref={fileInputRef}
+                      type="file"
+                      className="hidden"
+                      accept=".pdf,.txt,.jpg,.jpeg,.png,.mp3,.wav"
+                      onChange={handleFileUpload}
+                    />
+                  </div>
+
+                  <div className="border rounded-lg p-4 max-h-[200px] overflow-y-auto">
+                    {uploadedFiles.length === 0 ? (
+                      <p className="text-sm text-gray-500 text-center py-4">
+                        No files uploaded yet
                       </p>
-                    </div>
-                    <p className="text-lg font-bold text-blue-700">
-                      {completionStatus.completed} / {completionStatus.total} completed
-                    </p>
-                    <p className="text-xs text-blue-600 mt-2">
-                      Results will be available when everyone finishes
-                    </p>
-                  </div>
-                )}
-
-                {completionStatus.allCompleted && (
-                  <div className="bg-green-50 border border-green-200 rounded-lg p-4 mb-6">
-                    <p className="text-sm font-semibold text-green-900">
-                      ✓ Everyone has completed the quiz!
-                    </p>
-                  </div>
-                )}
-
-                <div className="space-y-3">
-                  <Button
-                    variant="secondary"
-                    onClick={handleStartAiReview}
-                    size="lg"
-                    className="w-full"
-                    disabled={isCreatingAiReview}
-                  >
-                    {isCreatingAiReview ? (
-                      <>
-                        <Loader2 className="size-5 mr-2 animate-spin" />
-                        Creating AI Review...
-                      </>
                     ) : (
-                      <>
-                        <BookOpen className="size-5 mr-2" />
-                        Start AI Review
-                      </>
-                    )}
-                  </Button>
-                  <Button
-                    onClick={handleViewResults}
-                    size="lg"
-                    className="w-full"
-                    disabled={!completionStatus.allCompleted}
-                  >
-                    <BookOpen className="size-5 mr-2" />
-                    View Results
-                  </Button>
-                  <Button
-                    variant="outline"
-                    onClick={() => {
-                      setShowQuizCompleted(false);
-                      setCurrentQuestionIndex(0);
-                      setIsReviewMode(true);
-                    }}
-                    className="w-full"
-                  >
-                    Review Quiz
-                  </Button>
-                  <Button
-                    variant="outline"
-                    onClick={() => setShowQuizSettings(true)}
-                    className="w-full"
-                  >
-                    Start New Quiz
-                  </Button>
-                </div>
-              </div>
-            </div>
-          ) : showResults ? (
-            /* Results View */
-            <div className="flex-1 flex flex-col p-6 overflow-y-auto">
-              <div className="flex items-center justify-between mb-6">
-                <h3 className="text-xl font-bold">Quiz Results</h3>
-                <Button variant="outline" onClick={() => setShowResults(false)}>
-                  Back to Quiz
-                </Button>
-              </div>
-              
-              <div className="space-y-6">
-                {quizResults.map((result, idx) => (
-                  <Card key={result.questionId} className="border-2">
-                    <CardHeader className="pb-3">
-                      <CardTitle className="text-base">
-                        Q{idx + 1}. {result.question}
-                      </CardTitle>
-                    </CardHeader>
-                    <CardContent className="space-y-3">
-                      <div className="space-y-1">
-                        {result.options.map((option, optIdx) => (
-                          <div
-                            key={optIdx}
-                            className={`p-2 rounded text-sm ${
-                              optIdx === result.correctAnswer
-                                ? 'bg-green-50 border border-green-500 font-semibold'
-                                : 'bg-gray-50'
-                            }`}
-                          >
-                            {String.fromCharCode(65 + optIdx)}. {option}
-                            {optIdx === result.correctAnswer && ' ✓'}
+                      <div className="space-y-2">
+                        {uploadedFiles.map((file) => (
+                          <div key={file.id} className="flex items-center gap-2 text-sm">
+                            <FileText className="size-4 text-gray-400" />
+                            <span className="flex-1">{file.fileName}</span>
+                            <span className="text-xs text-gray-400">
+                              {new Date(file.uploadedAt).toLocaleString()}
+                            </span>
                           </div>
                         ))}
                       </div>
-                      
-                      <div className="bg-blue-50 p-3 rounded">
-                        <p className="text-xs font-semibold text-blue-900 mb-1">Explanation:</p>
-                        <p className="text-sm text-gray-700">{result.explanation}</p>
-                      </div>
+                    )}
+                  </div>
+                </div>
 
-                      <div className="flex gap-4 text-sm font-medium pt-2 border-t">
-                        <div className="flex items-center gap-2 text-green-700">
-                          <CheckCircle className="size-4" />
-                          <span>{result.correctCount} Correct</span>
-                        </div>
-                        <div className="flex items-center gap-2 text-red-700">
-                          <XCircle className="size-4" />
-                          <span>{result.incorrectCount} Wrong</span>
-                        </div>
-                        <div className="flex items-center gap-2 text-gray-500">
-                          <HelpCircle className="size-4" />
-                          <span>{result.unansweredCount} Unanswered</span>
-                        </div>
-                      </div>
-                    </CardContent>
-                  </Card>
-                ))}
-              </div>
-
-              <div className="mt-6 pt-6 border-t text-center">
-                <div className="flex items-center justify-center gap-3">
+                <div className="mt-auto">
                   <Button
-                    variant="secondary"
-                    onClick={handleStartAiReview}
+                    onClick={() => setShowQuizSettings(true)}
+                    disabled={uploadedFiles.length === 0 || isGeneratingQuiz}
+                    className="w-full"
                     size="lg"
-                    disabled={isCreatingAiReview}
                   >
-                    {isCreatingAiReview ? (
-                      <>
-                        <Loader2 className="size-5 mr-2 animate-spin" />
-                        Creating AI Review...
-                      </>
+                    {isGeneratingQuiz ? (
+                      <><Loader2 className="size-5 mr-2 animate-spin" /> Generating...</>
                     ) : (
-                      <>
-                        <BookOpen className="size-5 mr-2" />
-                        Start AI Review
-                      </>
+                      <><BookOpen className="size-5 mr-2" /> Generate Quiz</>
                     )}
                   </Button>
-                  <Button onClick={() => setShowQuizSettings(true)} size="lg">
-                    <BookOpen className="size-5 mr-2" />
-                    Start New Quiz
-                  </Button>
                 </div>
               </div>
-            </div>
-          ) : quiz ? (
-            /* Quiz View */
-            <div className="flex-1 flex flex-col p-6">
-              <div className="mb-4 flex items-center justify-between pb-4 border-b">
-                <h3 className="text-lg font-bold">{isReviewMode ? 'Review Quiz' : 'Group Quiz'}</h3>
-                <div className="flex items-center gap-4">
-                  <span className="text-sm text-muted-foreground">
-                    Question {currentQuestionIndex + 1} / {quiz.questions.length}
-                  </span>
-                  {!isReviewMode && (
-                    <Button
-                      variant="outline"
-                      size="sm"
-                      onClick={handleViewResults}
-                      disabled={!completionStatus.allCompleted}
-                      title={!completionStatus.allCompleted ? `Waiting for others (${completionStatus.completed}/${completionStatus.total} completed)` : 'View results'}
-                    >
-                      View Results
-                    </Button>
-                  )}
-                  {isReviewMode && (
-                    <Button
-                      variant="outline"
-                      size="sm"
-                      onClick={() => {
-                        setIsReviewMode(false);
-                        setShowQuizCompleted(true);
-                      }}
-                    >
-                      Exit Review
-                    </Button>
-                  )}
-                </div>
-              </div>
-
-              {currentQuestion && (
-                <div className="flex-1 flex flex-col space-y-6">
-                  <div>
-                    <h4 className="text-xl font-semibold mb-4">
-                      {currentQuestion.question}
-                    </h4>
-
-                    <div className="space-y-3">
-                      {currentQuestion.options.map((option, idx) => {
-                        const isSelected = userAnswers[currentQuestion.id] === idx;
-                        const isCorrect = idx === currentQuestion.correctAnswer;
-                        const isWrong = isReviewMode && isSelected && !isCorrect;
-                        
-                        let buttonClass = 'w-full p-4 text-left rounded-lg border-2 transition-all ';
-                        if (isReviewMode) {
-                          if (isCorrect) {
-                            buttonClass += 'border-green-500 bg-green-50 ';
-                          } else if (isWrong) {
-                            buttonClass += 'border-red-500 bg-red-50 ';
-                          } else {
-                            buttonClass += 'border-gray-200 bg-gray-50 ';
-                          }
-                        } else {
-                          buttonClass += isSelected
-                            ? 'border-teal-500 bg-teal-50 '
-                            : 'border-gray-200 hover:border-teal-300 hover:bg-gray-50 ';
-                        }
-                        
-                        return (
-                          <button
-                            key={idx}
-                            onClick={() => !isReviewMode && handleAnswerQuestion(currentQuestion.id, idx)}
-                            disabled={isReviewMode}
-                            className={buttonClass}
-                          >
-                            <span className="font-semibold">{String.fromCharCode(65 + idx)}.</span> {option}
-                            {isReviewMode && isCorrect && <span className="ml-2 text-green-600 font-bold">✓ Correct</span>}
-                            {isReviewMode && isWrong && <span className="ml-2 text-red-600 font-bold">✗ Your Answer</span>}
-                          </button>
-                        );
-                      })}
-                    </div>
-                  </div>
-
-                  <div className="mt-auto flex justify-between pt-6 border-t">
-                    <Button
-                      variant="outline"
-                      onClick={() => setCurrentQuestionIndex((prev) => Math.max(0, prev - 1))}
-                      disabled={currentQuestionIndex === 0}
-                    >
-                      Previous
-                    </Button>
-                    <Button
-                      onClick={() => setCurrentQuestionIndex((prev) => Math.min(quiz.questions.length - 1, prev + 1))}
-                      disabled={currentQuestionIndex === quiz.questions.length - 1}
-                    >
-                      Next
-                    </Button>
-                  </div>
-                </div>
-              )}
-            </div>
-          ) : (
-            /* Upload & Generate Quiz View */
-            <div className="flex-1 flex flex-col p-6">
-              <div className="mb-6">
-                <h3 className="text-xl font-bold mb-2">Group Quiz</h3>
-                <p className="text-sm text-muted-foreground">
-                  Upload study materials and generate a quiz for everyone!
-                </p>
-              </div>
-
-              <div className="space-y-4 mb-6">
-                <div className="flex items-center justify-between">
-                  <h4 className="font-semibold">Uploaded Files ({uploadedFiles.length}/{group.maxParticipants})</h4>
-                  <Button
-                    onClick={() => fileInputRef.current?.click()}
-                    disabled={isUploading || uploadedFiles.length >= group.maxParticipants}
-                    size="sm"
-                  >
-                    {isUploading ? (
-                      <><Loader2 className="size-4 mr-2 animate-spin" /> Uploading...</>
-                    ) : (
-                      <><Upload className="size-4 mr-2" /> Upload</>
-                    )}
-                  </Button>
-                  <input
-                    ref={fileInputRef}
-                    type="file"
-                    className="hidden"
-                    accept=".pdf,.txt,.jpg,.jpeg,.png,.mp3,.wav"
-                    onChange={handleFileUpload}
-                  />
-                </div>
-
-                <div className="border rounded-lg p-4 max-h-[200px] overflow-y-auto">
-                  {uploadedFiles.length === 0 ? (
-                    <p className="text-sm text-gray-500 text-center py-4">
-                      No files uploaded yet
-                    </p>
-                  ) : (
-                    <div className="space-y-2">
-                      {uploadedFiles.map((file) => (
-                        <div key={file.id} className="flex items-center gap-2 text-sm">
-                          <FileText className="size-4 text-gray-400" />
-                          <span className="flex-1">{file.fileName}</span>
-                          <span className="text-xs text-gray-400">
-                            {new Date(file.uploadedAt).toLocaleString()}
-                          </span>
-                        </div>
-                      ))}
-                    </div>
-                  )}
-                </div>
-              </div>
-
-              <div className="mt-auto">
-                <Button
-                  onClick={() => setShowQuizSettings(true)}
-                  disabled={uploadedFiles.length === 0 || isGeneratingQuiz}
-                  className="w-full"
-                  size="lg"
-                >
-                  {isGeneratingQuiz ? (
-                    <><Loader2 className="size-5 mr-2 animate-spin" /> Generating...</>
-                  ) : (
-                    <><BookOpen className="size-5 mr-2" /> Generate Quiz</>
-                  )}
-                </Button>
-              </div>
-            </div>
-          )}
+            )}
           </div>
         )}
 
@@ -1244,9 +1295,8 @@ export function StudyRoomPage({
                           className={`flex ${isMine ? 'justify-end' : 'justify-start'}`}
                         >
                           <div
-                            className={`max-w-[80%] rounded-2xl px-3 py-2 text-xs ${
-                              isMine ? 'bg-emerald-500 text-white' : 'bg-gray-100 text-gray-700'
-                            } ${message.pending ? 'opacity-70' : ''}`}
+                            className={`max-w-[80%] rounded-2xl px-3 py-2 text-xs ${isMine ? 'bg-emerald-500 text-white' : 'bg-gray-100 text-gray-700'
+                              } ${message.pending ? 'opacity-70' : ''}`}
                           >
                             {!isMine && (
                               <p className="text-[10px] font-semibold mb-1">{message.senderName}</p>
