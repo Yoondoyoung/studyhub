@@ -940,12 +940,15 @@ export default function App() {
             </span>
           </button>
           
-          <div className="relative">
+          <div
+            className="w-full"
+            onMouseEnter={() => {
+              setShowAiStudyDropdown(true);
+              loadAiStudySessions();
+            }}
+            onMouseLeave={() => setShowAiStudyDropdown(false)}
+          >
             <button
-              onMouseEnter={() => {
-                setShowAiStudyDropdown(true);
-                loadAiStudySessions();
-              }}
               onClick={handleAiStudyClick}
               className="w-full rounded-xl px-1.5 py-1 flex items-center gap-3 hover:bg-gray-50 transition-colors"
               title="AI Study"
@@ -962,24 +965,16 @@ export default function App() {
               </span>
             </button>
 
-            {/* Expanded session list with animation */}
-            {showAiStudyDropdown && aiStudySessions.length > 0 && (
-              <div 
-                className="absolute left-full ml-2 top-1/2 -translate-y-1/2 w-44 space-y-0.5 overflow-hidden rounded-xl bg-white shadow-lg p-2"
-                onMouseLeave={() => setShowAiStudyDropdown(false)}
-                style={{
-                  animation: 'slideDown 0.2s ease-out'
-                }}
-              >
-                {aiStudySessions.map((session, index) => (
-                  <div
-                    key={session.id}
-                    className="relative group"
-                    style={{ 
-                      animation: `fadeInSlide 0.3s ease-out ${index * 0.05}s forwards`,
-                      opacity: 0
-                    }}
-                  >
+            <div
+              className={`overflow-hidden transition-all duration-300 ease-out ${
+                showAiStudyDropdown && aiStudySessions.length > 0
+                  ? 'max-h-80 opacity-100 mt-2'
+                  : 'max-h-0 opacity-0 mt-0'
+              }`}
+            >
+              <div className="w-full space-y-0.5 rounded-xl bg-white shadow-sm border border-gray-100 p-2">
+                {aiStudySessions.map((session) => (
+                  <div key={session.id} className="relative group">
                     <button
                       onClick={() => handleSessionSelect(session.id)}
                       className="w-full text-left px-3 py-2 pr-8 rounded-md hover:bg-gray-50 transition-all duration-150 text-xs"
@@ -1006,7 +1001,7 @@ export default function App() {
                   </div>
                 ))}
               </div>
-            )}
+            </div>
           </div>
           
           <button
@@ -1025,7 +1020,9 @@ export default function App() {
               Calendar
             </span>
           </button>
+        </nav>
 
+        <div className="mt-auto flex flex-col gap-3">
           <button
             onClick={() => setCurrentPage('profile')}
             className="w-full rounded-xl px-1.5 py-1 flex items-center gap-3 hover:bg-gray-50 transition-colors"
@@ -1055,7 +1052,7 @@ export default function App() {
               Logout
             </span>
           </button>
-        </nav>
+        </div>
       </aside>
 
       {/* Main Content */}
