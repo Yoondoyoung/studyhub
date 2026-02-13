@@ -340,24 +340,33 @@ export function StudyRoomPage({
     setSocketReady(false);
 
     socket.onopen = () => {
+      console.log('[StudyRoomPage] WebSocket opened, sending room:join', groupId);
       setSocketReady(true);
       socket.send(JSON.stringify({ type: 'room:join', roomId: groupId }));
     };
 
     socket.onclose = () => {
+      console.log('[StudyRoomPage] WebSocket closed');
       setSocketReady(false);
+    };
+
+    socket.onerror = (error) => {
+      console.error('[StudyRoomPage] WebSocket error', error);
     };
 
     socket.onmessage = (event) => {
       try {
         const payload = JSON.parse(event.data);
+        console.log('[StudyRoomPage] WebSocket message received', payload.type);
         if (payload?.type === 'room:error') {
+          console.error('[StudyRoomPage] room:error', payload.message);
           toast.error(payload.message || 'Unable to join room');
           return;
         }
         if (payload?.type !== 'room:message' || !payload?.message) return;
         const message = payload.message as RoomMessage;
         if (message.roomId !== groupId) return;
+        console.log('[StudyRoomPage] room:message received', message);
         setChatMessages((prev) => {
           if (message.clientId) {
             const index = prev.findIndex((item) => item.clientId === message.clientId);

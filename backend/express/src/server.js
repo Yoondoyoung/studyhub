@@ -3619,19 +3619,24 @@ wss.on("connection", async (socket, req) => {
         if (payload?.type === "room:join") {
           const roomId = String(payload?.roomId ?? "");
           if (!roomId) return;
+          console.log("[ws:room:join] user", socket.userId, "roomId", roomId);
           const group = await kvGet(`study-group:${roomId}`);
           if (!group) {
+            console.log("[ws:room:join] group not found for roomId", roomId);
             socket.send(JSON.stringify({ type: "room:error", message: "Not accepted" }));
             return;
           }
           // Ensure participants is an array
           if (!Array.isArray(group.participants)) group.participants = [];
+          console.log("[ws:room:join] participants", group.participants, "hostId", group.hostId);
           const isParticipant = group.participants.includes(socket.userId);
           const isHost = group.hostId === socket.userId;
           if (!isParticipant && !isHost) {
+            console.log("[ws:room:join] 403 Not accepted for user", socket.userId, "participants", group.participants);
             socket.send(JSON.stringify({ type: "room:error", message: "Not accepted" }));
             return;
           }
+          console.log("[ws:room:join] success - joining room", roomId);
           joinRoom(roomId, socket);
           return;
         }
@@ -3649,16 +3654,20 @@ wss.on("connection", async (socket, req) => {
           const clientId = payload?.clientId ? String(payload.clientId) : null;
           if (!roomId || !content) return;
           if (!socket.userId) return;
+          console.log("[ws:room:send] user", socket.userId, "roomId", roomId, "content length", content.length);
           const group = await kvGet(`study-group:${roomId}`);
           if (!group) {
+            console.log("[ws:room:send] group not found for roomId", roomId);
             socket.send(JSON.stringify({ type: "room:error", message: "Not accepted" }));
             return;
           }
           // Ensure participants is an array
           if (!Array.isArray(group.participants)) group.participants = [];
+          console.log("[ws:room:send] participants", group.participants, "hostId", group.hostId);
           const isParticipant = group.participants.includes(socket.userId);
           const isHost = group.hostId === socket.userId;
           if (!isParticipant && !isHost) {
+            console.log("[ws:room:send] 403 Not accepted for user", socket.userId, "participants", group.participants);
             socket.send(JSON.stringify({ type: "room:error", message: "Not accepted" }));
             return;
           }
@@ -3678,6 +3687,7 @@ wss.on("connection", async (socket, req) => {
           const trimmed = nextMessages.slice(-ROOM_MESSAGE_LIMIT);
           await kvSet(key, { messages: trimmed });
 
+          console.log("[ws:room:send] sending message to room", roomId);
           sendToRoom(roomId, { type: "room:message", message });
           return;
         }
