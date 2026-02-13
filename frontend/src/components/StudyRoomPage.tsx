@@ -29,6 +29,7 @@ interface Group {
   date: string;
   time: string;
   maxParticipants: number;
+  participants?: string[];
   participantsWithNames?: Participant[];
   meetingId?: string;
   studyType?: string;

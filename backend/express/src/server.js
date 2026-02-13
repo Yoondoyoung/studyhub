@@ -960,7 +960,6 @@ app.get("/study-groups/:id/presence", async (req, res) => {
     if (!group) return res.status(404).json({ error: "Group not found" });
     // Ensure participants is an array
     if (!Array.isArray(group.participants)) group.participants = [];
-    
     const isParticipant = group.participants.includes(user.id);
     const isHost = group.hostId === user.id;
     if (!isParticipant && !isHost) {
@@ -984,7 +983,6 @@ app.get("/study-groups/:id/chat", async (req, res) => {
     if (!group) return res.status(404).json({ error: "Group not found" });
     // Ensure participants is an array
     if (!Array.isArray(group.participants)) group.participants = [];
-    
     const isParticipant = group.participants.includes(user.id);
     const isHost = group.hostId === user.id;
     if (!isParticipant && !isHost) {
@@ -1007,15 +1005,33 @@ app.post("/study-groups/:id/presence", async (req, res) => {
     if (!group) return res.status(404).json({ error: "Group not found" });
     // Ensure participants is an array
     if (!Array.isArray(group.participants)) group.participants = [];
+    // Ensure applicants is an array
+    if (!Array.isArray(group.applicants)) group.applicants = [];
     
     const participantIds = group.participants;
     const isParticipant = participantIds.includes(user.id);
     const isHost = group.hostId === user.id;
+    
+    // If not a participant and not host, check if they were just accepted
+    // (they might have been removed from applicants but not yet added to participants due to timing)
     if (!isParticipant && !isHost) {
-      return res.status(403).json({ error: "Not accepted" });
+      // Check if they're in applicants (shouldn't be after accept, but check anyway)
+      const wasApplicant = group.applicants.includes(user.id);
+      if (!wasApplicant) {
+        // They're not an applicant anymore, so they should have been accepted
+        // Add them to participants (race condition fix)
+        group.participants.push(user.id);
+        await kvSet(`study-group:${groupId}`, group);
+      } else {
+        // Still an applicant, not accepted yet
+        return res.status(403).json({ error: "Not accepted" });
+      }
     }
+    
+    // Ensure host is always in participants
     if (!isParticipant && isHost) {
       group.participants = [...participantIds, user.id];
+      await kvSet(`study-group:${groupId}`, group);
     }
     const profile = await kvGet(`user:${user.id}`);
     const username = profile?.username ?? profile?.email ?? user.id?.slice(0, 8) ?? "User";

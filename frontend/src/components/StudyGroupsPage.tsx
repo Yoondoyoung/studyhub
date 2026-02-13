@@ -398,7 +398,10 @@ export function StudyGroupsPage({ accessToken, userId, currentUserUsername, room
           ) : (
             pagedGroups.map((group, index) => {
             const isHost = group.hostId === userId;
-            const isMember = (group.participants ?? []).includes(userId);
+            const isInThisRoom = roomUserIsIn === group.id;
+            // Treat user as member if they are in the participants list OR
+            // if the app knows they're currently in this room (badge case).
+            const isMember = isInThisRoom || (group.participants ?? []).includes(userId);
             const hasApplied = (group.applicants ?? []).includes(userId);
             const isFull = (group.participants?.length ?? 0) >= (group.maxParticipants ?? 10);
 
